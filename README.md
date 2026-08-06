@@ -89,4 +89,4 @@ and any stray write corrupts the render.
 
 ## Licence
 
-Not yet chosen.
+[MIT](LICENSE) © Alon Shuldiner
