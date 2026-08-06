@@ -98,12 +98,17 @@ func TestLoad_Rejects(t *testing.T) {
 	}
 }
 
-func TestLoad_UnreadableFile(t *testing.T) {
-	// A directory is the portable way to be unreadable-as-a-file; chmod 0 does
-	// nothing when the tests run as root, as they do in some CI images.
-	_, err := config.Load(t.TempDir())
+func TestLoad_UnopenableFile(t *testing.T) {
+	// A path whose parent is a file, rather than a directory or a chmod'd file:
+	// os.Open fails on it on every OS (ENOTDIR, and its Windows equivalent),
+	// whereas chmod 0 does nothing when the tests run as root — as they do in
+	// some CI images — and reading a directory is a platform-dependent mess.
+	notADir := writeConfig(t, "target: localhost:50051\n")
+
+	_, err := config.Load(filepath.Join(notADir, "config.yaml"))
 
 	require.Error(t, err)
+	assert.Contains(t, err.Error(), "open config")
 }
 
 func TestDefaultPath(t *testing.T) {
