@@ -39,12 +39,14 @@ type Response struct {
 	viewport viewport.Model
 	spinner  spinner.Model
 
-	state    responseState
-	method   grpcclient.Method
+	state   responseState
+	method  grpcclient.Method
+	status  grpcclient.CallStatus
+	hasCode bool
+
+	// body is the text under the status line, held unwrapped so that a resize
+	// can lay it out again.
 	body     string
-	status   grpcclient.CallStatus
-	hasCode  bool
-	failure  string
 	duration time.Duration
 
 	width   int
@@ -94,7 +96,6 @@ func (r *Response) Clear() {
 	r.body = ""
 	r.status = grpcclient.CallStatus{}
 	r.hasCode = false
-	r.failure = ""
 	r.duration = 0
 	r.viewport.SetContent("")
 	r.viewport.GotoTop()
@@ -118,7 +119,7 @@ func (r *Response) SetSuccess(body string, took time.Duration) {
 	r.state = responseOK
 	r.body = body
 	r.duration = took
-	r.viewport.SetContent(body)
+	r.setBody()
 	r.viewport.GotoTop()
 }
 
@@ -130,15 +131,30 @@ func (r *Response) SetFailure(message string, status grpcclient.CallStatus, hasS
 	r.state = responseFailed
 	r.status = status
 	r.hasCode = hasStatus
-	r.failure = message
 	r.duration = took
 
-	body := message
+	// With a status it is the server's message that belongs on screen; without
+	// one the call never reached the wire, and the raw error is all there is.
+	r.body = message
 	if hasStatus {
-		body = status.Message
+		r.body = status.Message
 	}
-	r.viewport.SetContent(wrapText(body, r.viewport.Width))
+	r.setBody()
 	r.viewport.GotoTop()
+}
+
+// setBody lays the body out for the current width.
+//
+// A failure's text is wrapped; a JSON body is not — it arrives already
+// indented, and re-flowing it would destroy that. Every width change goes
+// through here, or a resize leaves the old wrap in place and the viewport
+// silently truncates whatever now runs past the edge.
+func (r *Response) setBody() {
+	if r.state == responseFailed {
+		r.viewport.SetContent(wrapText(r.body, r.viewport.Width))
+		return
+	}
+	r.viewport.SetContent(r.body)
 }
 
 // SetSize sets the panel's inner content area. One line is reserved for the
@@ -148,10 +164,7 @@ func (r *Response) SetSize(width, height int) {
 	r.height = height
 	r.viewport.Width = width
 	r.viewport.Height = max(height-2, 0)
-
-	if r.state == responseFailed && !r.hasCode {
-		r.viewport.SetContent(wrapText(r.failure, width))
-	}
+	r.setBody()
 }
 
 // Focus gives the panel focus.

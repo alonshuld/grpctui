@@ -329,11 +329,12 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 
 // send builds a request from the form and starts the call, or leaves the form
 // showing why it could not.
+//
+// A call already in flight is replaced rather than protected: [Model.startCall]
+// cancels it and the sequence number drops its answer, which is what the user
+// pressing send again is asking for. Swallowing the keystroke instead would
+// look like the key had stopped working.
 func (m *Model) send() tea.Cmd {
-	if m.response.InFlight() {
-		return nil
-	}
-
 	req, ok := m.request.Submit()
 	if !ok {
 		// The form grew an error row, so the split between it and the response

@@ -710,6 +710,27 @@ func TestModel_SendRequestMsgStartsACall(t *testing.T) {
 	assert.Contains(t, m.View(), "from a message")
 }
 
+// ctrl+s during a call replaces it rather than being swallowed: the sequence
+// number already exists so that the abandoned call's answer is dropped, and a
+// keystroke that silently does nothing is worse than either alternative.
+func TestModel_SendDuringACallReplacesIt(t *testing.T) {
+	client := healthyClient()
+	client.invoke = func(ctx context.Context, _ grpcclient.Method, _ proto.Message) (*grpcclient.UnaryResponse, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+
+	m := settled(t, newModel(t, client))
+	m = selectMethod(t, m, 3)
+
+	m, first := press(t, m, "ctrl+s")
+	require.NotNil(t, first)
+
+	_, second := press(t, m, "ctrl+s")
+
+	assert.NotNil(t, second, "the second ctrl+s was swallowed")
+}
+
 func TestModel_InFlightShowsALoadingState(t *testing.T) {
 	client := healthyClient()
 	client.invoke = func(ctx context.Context, _ grpcclient.Method, _ proto.Message) (*grpcclient.UnaryResponse, error) {

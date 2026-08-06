@@ -107,6 +107,40 @@ func TestResponse_LongMessagesWrapInsteadOfOverflowing(t *testing.T) {
 	}
 }
 
+// Resizing the terminal must re-wrap whatever is on screen. A body still
+// wrapped to the previous width does not spill out of the panel — the viewport
+// truncates it — so the failure mode is silent: the right-hand end of every
+// line simply goes missing.
+func TestResponse_RewrapsOnResize(t *testing.T) {
+	const tail = "LASTWORD"
+	long := strings.Repeat("a very long status message ", 10) + tail
+
+	cases := map[string]func(r *panels.Response){
+		"with a status": func(r *panels.Response) {
+			r.SetFailure("wrapped", grpcclient.CallStatus{Code: 3, Name: "InvalidArgument", Message: long}, true, 0)
+		},
+		"without a status": func(r *panels.Response) {
+			r.SetFailure(long, grpcclient.CallStatus{}, false, 0)
+		},
+	}
+
+	for name, fail := range cases {
+		t.Run(name, func(t *testing.T) {
+			r := panels.NewResponse(keys.Default(), styles.New())
+			r.SetSize(80, 24)
+			fail(&r)
+			require.Contains(t, r.View(), tail, "the message was cut off before the resize")
+
+			r.SetSize(30, 24)
+
+			assert.Contains(t, r.View(), tail, "the body kept the old wrap width and lost its right-hand end")
+			for line := range strings.SplitSeq(r.View(), "\n") {
+				assert.LessOrEqual(t, len([]rune(line)), 30, "line ran past the panel: %q", line)
+			}
+		})
+	}
+}
+
 func TestResponse_Clear(t *testing.T) {
 	r := newResponse(t)
 	r.SetMethod(responseMethod())
