@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -31,11 +32,19 @@ type serverOption func(*serverConfig)
 type serverConfig struct {
 	reflect bool
 	health  bool
+	delay   time.Duration
 }
 
 // withoutReflection starts a server that does not serve the reflection API.
 func withoutReflection() serverOption {
 	return func(cfg *serverConfig) { cfg.reflect = false }
+}
+
+// withSlowUnary makes every unary call take d, so that cancellation and
+// deadlines have something to interrupt. Reflection is a streaming RPC and is
+// left at full speed.
+func withSlowUnary(d time.Duration) serverOption {
+	return func(cfg *serverConfig) { cfg.delay = d }
 }
 
 func startTestServer(t *testing.T, opts ...serverOption) *testServer {
@@ -47,7 +56,7 @@ func startTestServer(t *testing.T, opts ...serverOption) *testServer {
 	}
 
 	lis := bufconn.Listen(bufSize)
-	srv := grpc.NewServer()
+	srv := grpc.NewServer(grpc.UnaryInterceptor(delayInterceptor(cfg.delay)))
 	if cfg.health {
 		healthpb.RegisterHealthServer(srv, health.NewServer())
 	}
@@ -62,6 +71,21 @@ func startTestServer(t *testing.T, opts ...serverOption) *testServer {
 	}()
 	t.Cleanup(ts.stop)
 	return ts
+}
+
+// delayInterceptor holds every unary call for d, or until the client gives up.
+func delayInterceptor(d time.Duration) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		if d <= 0 {
+			return handler(ctx, req)
+		}
+		select {
+		case <-time.After(d):
+			return handler(ctx, req)
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 }
 
 // dialer returns a grpc dial option that routes connections to this server.

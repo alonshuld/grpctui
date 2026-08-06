@@ -51,6 +51,16 @@ type Method struct {
 	Descriptor protoreflect.MethodDescriptor
 }
 
+// InputDescriptor returns the descriptor of the method's request message, or
+// nil when the method carries no descriptor at all. internal/protoschema turns
+// it into a form-field tree.
+func (m Method) InputDescriptor() protoreflect.MessageDescriptor {
+	if m.Descriptor == nil {
+		return nil
+	}
+	return m.Descriptor.Input()
+}
+
 // Kind describes a method's streaming shape.
 type Kind string
 

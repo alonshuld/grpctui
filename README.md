@@ -7,8 +7,10 @@ browser tab.
 Point it at a gRPC server with reflection enabled and it discovers the entire
 API surface with zero configuration.
 
-> **Status: v0.1 — Connect & Browse.** Reflection-based discovery and
-> keyboard navigation work today. Sending requests lands in v0.2.
+> **Status: v0.2 — First Request/Response Cycle.** Discover a server, fill in
+> a request form generated from the method's input message, send a unary call,
+> and read the decoded response. Nested and repeated fields land in v0.3;
+> metadata and TLS in v0.4; streaming in v0.5.
 
 ## Install
 
@@ -25,8 +27,15 @@ Prebuilt binaries for Linux, macOS, and Windows are attached to each
 grpctui localhost:50051
 ```
 
+Pick a method with `j`/`k` and `enter`, `tab` into the request form, `enter` to
+edit a field and `esc` when you are done with it, then `ctrl+s` to send. The
+response arrives as JSON in the panel below the form; a non-OK call shows its
+gRPC status code and the server's message in the same place.
+
 ```
 Flags:
+  -config string      read settings from this file; empty skips it
+                      (default "$XDG_CONFIG_HOME/grpctui/config.yaml")
   -log-file string    write logs to this file; empty disables logging
                       (default "$XDG_STATE_HOME/grpctui/grpctui.log")
   -log-level string   log level: debug, info, warn, error (default "error")
@@ -42,9 +51,36 @@ import "google.golang.org/grpc/reflection"
 reflection.Register(srv)
 ```
 
-v0.1 connects in plaintext only. TLS and mTLS arrive in v0.4.
+grpctui connects in plaintext only. TLS and mTLS arrive in v0.4.
 
 [reflection]: https://github.com/grpc/grpc/blob/master/doc/server-reflection.md
+
+## Configuration
+
+Everything works with no configuration at all. If you point grpctui at the same
+server every day, put its address in
+`$XDG_CONFIG_HOME/grpctui/config.yaml` (`~/.config/grpctui/config.yaml`):
+
+```yaml
+# The address to connect to when none is given on the command line.
+target: localhost:50051
+```
+
+A target argument always beats the file, so `grpctui other.example:443` still
+does what it says. A missing file is fine; an unknown key is an error, so a
+typo is never silently ignored.
+
+## Request fields
+
+The request form is generated from the method's input message. v0.2 fills in
+scalars — `string`, the integer and floating-point families, `bool`, `bytes`
+(base64) and enums, which take either a value name (`STATUS_SERVING`) or its
+number.
+
+Fields with a shape the form cannot edit yet — nested messages, repeated
+fields, maps and `oneof` members — are still listed, marked with the version
+that brings them (v0.3). A field left empty is left unset rather than sent as
+an explicit default.
 
 ## Keybindings
 
@@ -54,11 +90,18 @@ v0.1 connects in plaintext only. TLS and mTLS arrive in v0.4.
 | `ctrl+u`, `ctrl+d` | Page up / down |
 | `g`, `G` | Jump to top / bottom |
 | `→`/`l`, `←`/`h` | Expand / collapse a service |
-| `enter` | Toggle a service, or select a method |
+| `enter` | Toggle a service, select a method, or edit a field |
+| `space` | Toggle a `bool` field |
+| `ctrl+s` | Send the request |
+| `esc` | Stop editing a field, or cancel a call in flight |
 | `tab`, `shift+tab` | Switch panel |
 | `r` | Retry after a failed connection |
 | `?` | Toggle the full help |
-| `q`, `ctrl+c` | Quit |
+| `q` | Quit |
+| `ctrl+c` | Quit, even mid-edit |
+
+While a field is being edited every key is a character — `q` types a `q`. Only
+`ctrl+c`, `ctrl+s` and the panel switches keep their meaning.
 
 ## Development
 
@@ -76,7 +119,8 @@ The codebase is four strictly one-directional layers — transport → domain �
 | Package | Responsibility |
 | --- | --- |
 | `internal/grpcclient` | Dial, reflection discovery, dynamic invoke |
-| `internal/protoschema` | Descriptor → form-field tree (v0.2) |
+| `internal/protoschema` | Descriptor → form-field tree; values → wire message |
+| `internal/config` | `~/.config/grpctui/config.yaml` |
 | `internal/ui` | bubbletea models, panels, keymap, styles |
 | `cmd/grpctui` | Flags, config, `tea.Program` bootstrap |
 

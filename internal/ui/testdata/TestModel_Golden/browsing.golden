@@ -1,10 +1,10 @@
 ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓╭──────────────────────────────────────────────────────────╮
-┃ Services                             ┃│ Method                                                   │
-┃ ❯ ▾ demo.v1.Echo                     ┃│ Select a method to see its signature.                    │
-┃      Echo                            ┃│                                                          │
-┃   ▾ demo.v1.Greeter                  ┃│                                                          │
-┃      SayHello                        ┃│                                                          │
-┃      SayHelloStream «stream          ┃│                                                          │
+┃ Services                             ┃│ Request                                                  │
+┃ ❯ ▾ demo.v1.Echo                     ┃│ Select a method to build a request.                      │
+┃      Echo                            ┃╰──────────────────────────────────────────────────────────╯
+┃   ▾ demo.v1.Greeter                  ┃╭──────────────────────────────────────────────────────────╮
+┃      SayHello                        ┃│ Response                                                 │
+┃      SayHelloStream «stream          ┃│ Send a request to see the response.                      │
 ┃                                      ┃│                                                          │
 ┃                                      ┃│                                                          │
 ┃                                      ┃│                                                          │
@@ -21,4 +21,4 @@
 ┃                                      ┃│                                                          │
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛╰──────────────────────────────────────────────────────────╯
  localhost:50051  •  2 services  •  3 methods 
-↑/k up • ↓/j down • enter select • tab next panel • ? help • q quit
+↑/k up • ↓/j down • enter select/edit • ctrl+s send • tab next panel • ? help • q quit

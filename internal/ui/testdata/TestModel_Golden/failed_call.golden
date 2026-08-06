@@ -11,9 +11,9 @@
 ┃                                      ┃╰──────────────────────────────────────────────────────────╯
 ┃                                      ┃╭──────────────────────────────────────────────────────────╮
 ┃                                      ┃│ Response                                                 │
-┃                                      ┃│ demo.v1.HelloReply                                       │
+┃                                      ┃│ PermissionDenied (7)                                     │
 ┃                                      ┃│                                                          │
-┃                                      ┃│ Press ctrl+s to send the request.                        │
+┃                                      ┃│ caller is not allowed to greet                           │
 ┃                                      ┃│                                                          │
 ┃                                      ┃│                                                          │
 ┃                                      ┃│                                                          │

@@ -14,6 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"go.uber.org/zap"
 
+	"github.com/alonshuld/grpctui/internal/config"
 	"github.com/alonshuld/grpctui/internal/grpcclient"
 	"github.com/alonshuld/grpctui/internal/logging"
 	"github.com/alonshuld/grpctui/internal/ui"
@@ -33,9 +34,15 @@ func main() {
 
 type options struct {
 	target      string
+	configFile  string
 	logFile     string
 	logLevel    string
 	showVersion bool
+
+	// usage prints the flag set's help. The target may come from the config
+	// file, so whether one is missing is only known after the config has been
+	// read — by which point the flag set is out of scope.
+	usage func()
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
@@ -51,6 +58,20 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if opts.showVersion {
 		_, _ = fmt.Fprintf(stdout, "grpctui %s\n", version.Version())
 		return exitOK
+	}
+
+	cfg, err := config.Load(opts.configFile)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "grpctui: %v\n", err)
+		return exitError
+	}
+	if opts.target == "" {
+		opts.target = cfg.Target
+	}
+	if opts.target == "" {
+		opts.usage()
+		_, _ = fmt.Fprintf(stderr, "grpctui: missing target address\n")
+		return exitUsage
 	}
 
 	logger, closeLog, err := logging.New(logging.Config{File: opts.logFile, Level: opts.logLevel})
@@ -105,6 +126,8 @@ func parseFlags(args []string, stderr io.Writer) (options, error) {
 
 	fs := flag.NewFlagSet("grpctui", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	fs.StringVar(&opts.configFile, "config", config.DefaultPath(),
+		"read settings from this file; empty skips it")
 	fs.StringVar(&opts.logFile, "log-file", logging.DefaultFile(),
 		"write logs to this file; empty disables logging")
 	fs.StringVar(&opts.logLevel, "log-level", "error",
@@ -113,27 +136,25 @@ func parseFlags(args []string, stderr io.Writer) (options, error) {
 
 	fs.Usage = func() {
 		_, _ = fmt.Fprintf(stderr, "grpctui — a terminal UI for gRPC\n\n")
-		_, _ = fmt.Fprintf(stderr, "Usage:\n  grpctui [flags] <host:port>\n\nFlags:\n")
+		_, _ = fmt.Fprintf(stderr, "Usage:\n  grpctui [flags] <host:port>\n\n"+
+			"The target may also come from the config file's `target` key,\n"+
+			"in which case it can be left off the command line.\n\nFlags:\n")
 		fs.PrintDefaults()
 	}
+	opts.usage = fs.Usage
 
 	if err := fs.Parse(args); err != nil {
 		return opts, err
 	}
 
-	if opts.showVersion {
-		return opts, nil
-	}
-
-	switch fs.NArg() {
-	case 0:
-		fs.Usage()
-		return opts, errors.New("missing target address")
-	case 1:
-		opts.target = fs.Arg(0)
-	default:
+	// A missing target is not decided here: it may still come from the config
+	// file, which is loaded once the flags — including --config — are known.
+	if fs.NArg() > 1 {
 		fs.Usage()
 		return opts, fmt.Errorf("expected one target address, got %d", fs.NArg())
+	}
+	if fs.NArg() == 1 {
+		opts.target = fs.Arg(0)
 	}
 
 	return opts, nil

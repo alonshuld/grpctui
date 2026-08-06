@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -16,6 +17,11 @@ import (
 // non-interactive test. Behaviour beyond this point is covered by
 // internal/ui's teatest suite.
 func TestRun(t *testing.T) {
+	// The default config path is derived from the environment, and a real one
+	// on the developer's machine would supply a target these cases assume is
+	// missing.
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
 	tests := map[string]struct {
 		args       []string
 		wantCode   int
@@ -55,6 +61,11 @@ func TestRun(t *testing.T) {
 			args:       []string{"--log-level", "chatty", "localhost:50051"},
 			wantCode:   exitError,
 			wantStderr: `invalid log level "chatty"`,
+		},
+		"unreadable config": {
+			args:       []string{"--config", "/dev/null/nope/config.yaml", "localhost:50051"},
+			wantCode:   exitError,
+			wantStderr: "open config",
 		},
 	}
 
@@ -111,4 +122,48 @@ func TestParseFlags_EmptyLogFileDisablesLogging(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Empty(t, opts.logFile)
+}
+
+// writeConfig puts a config file in a temp dir and returns its path.
+func writeConfig(t *testing.T, body string) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+	return path
+}
+
+// The target may come from the config file, but an argument always wins: a
+// config file is a default, not an override.
+func TestRun_TargetPrecedence(t *testing.T) {
+	cfg := writeConfig(t, "target: config.example:50051\n")
+
+	t.Run("the config file supplies a missing target", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+
+		// --log-level is invalid on purpose: it fails after the target has been
+		// resolved but before the TUI takes the terminal, which is as far as a
+		// non-interactive test can go.
+		code := run([]string{"--config", cfg, "--log-level", "chatty"}, &stdout, &stderr)
+
+		assert.Equal(t, exitError, code)
+		assert.NotContains(t, stderr.String(), "missing target address")
+	})
+
+	t.Run("an argument beats the config file", func(t *testing.T) {
+		opts, err := parseFlags([]string{"--config", cfg, "argument.example:50051"}, &bytes.Buffer{})
+
+		require.NoError(t, err)
+		assert.Equal(t, "argument.example:50051", opts.target)
+	})
+
+	t.Run("no target anywhere is a usage error", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+
+		code := run([]string{"--config", writeConfig(t, "# nothing here\n")}, &stdout, &stderr)
+
+		assert.Equal(t, exitUsage, code)
+		assert.Contains(t, stderr.String(), "missing target address")
+		assert.Contains(t, stderr.String(), "Usage:")
+	})
 }
