@@ -1,0 +1,24 @@
+╭──────────────────────────────────────╮┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+│ Services                             │┃ Method                                                   ┃
+│   ▾ demo.v1.Echo                     │┃ SayHello                                                 ┃
+│      Echo                            │┃                                                          ┃
+│   ▾ demo.v1.Greeter                  │┃ service   demo.v1.Greeter                                ┃
+│ ❯    SayHello                        │┃ full      demo.v1.Greeter.SayHello                       ┃
+│      SayHelloStream «stream          │┃ type      unary                                          ┃
+│                                      │┃                                                          ┃
+│                                      │┃ request   demo.v1.HelloRequest                           ┃
+│                                      │┃ response  demo.v1.HelloReply                             ┃
+│                                      │┃                                                          ┃
+│                                      │┃ Request form and invocation arrive in v0.2.              ┃
+│                                      │┃                                                          ┃
+│                                      │┃                                                          ┃
+│                                      │┃                                                          ┃
+│                                      │┃                                                          ┃
+│                                      │┃                                                          ┃
+│                                      │┃                                                          ┃
+│                                      │┃                                                          ┃
+│                                      │┃                                                          ┃
+│                                      │┃                                                          ┃
+╰──────────────────────────────────────╯┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+ localhost:50051  •  2 services  •  3 methods 
+↑/k up • ↓/j down • enter select • tab next panel • ? help • q quit
