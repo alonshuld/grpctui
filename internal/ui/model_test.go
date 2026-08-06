@@ -410,3 +410,58 @@ func finalOutput(t *testing.T, tm *teatest.TestModel) []byte {
 	tm.WaitFinished(t, teatest.WithFinalTimeout(5*time.Second))
 	return []byte(asModel(t, tm.FinalModel(t)).View())
 }
+
+// A resize down to a sliver is a normal thing for a user to do, and a panic
+// there takes the terminal with it. Every screen must survive degenerate
+// dimensions.
+func TestModel_SurvivesTinyTerminals(t *testing.T) {
+	sizes := []struct{ w, h int }{
+		{1, 1}, {2, 3}, {5, 2}, {10, 5}, {20, 4}, {0, 10}, {80, 1},
+	}
+
+	clients := map[string]func() ui.Discoverer{
+		"discovered": func() ui.Discoverer {
+			return &fakeDiscoverer{target: "localhost:50051", services: testServices()}
+		},
+		"failed": func() ui.Discoverer {
+			return &fakeDiscoverer{
+				target: "localhost:50051",
+				err: fmt.Errorf("list services: %w",
+					status.Error(codes.Unavailable, "connection refused")),
+			}
+		},
+	}
+
+	for state, newClient := range clients {
+		for _, size := range sizes {
+			t.Run(fmt.Sprintf("%s %dx%d", state, size.w, size.h), func(t *testing.T) {
+				m := newModel(t, newClient())
+
+				next, _ := m.Update(tea.WindowSizeMsg{Width: size.w, Height: size.h})
+				m = asModel(t, next)
+				m = asModel(t, mustUpdate(m, discoveryResult(t, m)))
+
+				assert.NotPanics(t, func() { _ = m.View() })
+			})
+		}
+	}
+}
+
+// Selecting a method fills the detail panel but must not move the user into
+// it: browsing means walking the list with j/k, and having focus jump on every
+// enter would break that after the first press.
+func TestModel_SelectingAMethodKeepsFocusOnTheTree(t *testing.T) {
+	m := settled(t, newModel(t, &fakeDiscoverer{
+		target:   "localhost:50051",
+		services: testServices(),
+	}))
+
+	m, cmd := press(t, m, "j", "enter")
+	require.NotNil(t, cmd)
+	m = asModel(t, mustUpdate(m, cmd()))
+	require.Contains(t, m.View(), "demo.v1.EchoRequest", "detail panel did not fill")
+
+	// j must still walk the tree.
+	m, _ = press(t, m, "j")
+	assert.Contains(t, m.View(), "❯ ▾ demo.v1.Greeter")
+}

@@ -209,9 +209,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case panels.MethodSelectedMsg:
+		// Focus deliberately stays on the tree: selecting fills the detail
+		// panel but does not move the user into it, so j/k keep walking the
+		// method list. Tab is how you enter the panel — the same way lazygit
+		// and k9s behave. (v0.2 revisits this, where the detail panel becomes
+		// an editable request form and entering it is the point.)
 		m.detail.SetMethod(msg.Service, msg.Method)
-		m.focus = focusDetail
-		m.syncFocus()
 		m.logger.Debug("method selected", zap.String("method", msg.Method.FullName))
 		return m, nil
 
