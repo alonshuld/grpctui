@@ -2,10 +2,10 @@
 //
 // One root [Model] owns focus and the panel layout; the panels themselves live
 // in internal/ui/panels as child models. Blocking work never happens inside
-// Update — reflection and (from v0.2) RPCs are tea.Cmds that return a message.
+// Update — reflection and RPCs are tea.Cmds that return a message.
 //
 // Nothing here imports google.golang.org/grpc. The UI talks to the transport
-// layer through the small [Discoverer] interface and the plain types in
+// layer through the small [Client] interface and the plain types in
 // internal/grpcclient.
 package ui
 
@@ -22,8 +22,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/alonshuld/grpctui/internal/grpcclient"
+	"github.com/alonshuld/grpctui/internal/protoschema"
 	"github.com/alonshuld/grpctui/internal/ui/keys"
 	"github.com/alonshuld/grpctui/internal/ui/panels"
 	"github.com/alonshuld/grpctui/internal/ui/styles"
@@ -32,12 +34,28 @@ import (
 // DefaultDiscoveryTimeout bounds a single reflection sweep.
 const DefaultDiscoveryTimeout = 10 * time.Second
 
-// Discoverer is the slice of the transport layer the UI depends on. Keeping it
-// an interface here — rather than taking *grpcclient.Client — is what lets the
-// UI tests run with no server at all.
+// DefaultCallTimeout bounds a single unary call. It is generous on purpose:
+// the user can give up sooner with esc, and a tool for debugging misbehaving
+// services should not be the thing that decides a slow server has failed.
+const DefaultCallTimeout = 60 * time.Second
+
+// Discoverer is the discovery half of the transport layer.
 type Discoverer interface {
 	Target() string
 	ListServices(ctx context.Context) ([]grpcclient.Service, error)
+}
+
+// Invoker is the invocation half of the transport layer.
+type Invoker interface {
+	InvokeUnary(ctx context.Context, method grpcclient.Method, req proto.Message) (*grpcclient.UnaryResponse, error)
+}
+
+// Client is the slice of the transport layer the UI depends on. Keeping it an
+// interface here — rather than taking *grpcclient.Client — is what lets the UI
+// tests run with no server at all.
+type Client interface {
+	Discoverer
+	Invoker
 }
 
 type state int
@@ -52,7 +70,11 @@ type focus int
 
 const (
 	focusTree focus = iota
-	focusDetail
+	focusRequest
+	focusResponse
+
+	// focusCount is how many panels tab cycles through.
+	focusCount = int(focusResponse) + 1
 )
 
 // Option configures a [Model].
@@ -86,9 +108,18 @@ func WithDiscoveryTimeout(d time.Duration) Option {
 	}
 }
 
+// WithCallTimeout overrides [DefaultCallTimeout].
+func WithCallTimeout(d time.Duration) Option {
+	return func(m *Model) {
+		if d > 0 {
+			m.callTimeout = d
+		}
+	}
+}
+
 // Model is grpctui's root model.
 type Model struct {
-	client Discoverer
+	client Client
 	logger *zap.Logger
 
 	// ctx is the parent for every RPC the UI issues. bubbletea's Update
@@ -103,22 +134,32 @@ type Model struct {
 	help    help.Model
 	spinner spinner.Model
 
-	tree   panels.Tree
-	detail panels.Detail
+	tree     panels.Tree
+	request  panels.Form
+	response panels.Response
 
 	state    state
 	err      error
 	focus    focus
 	services []grpcclient.Service
 
+	// callSeq numbers calls so that a result arriving after the user has moved
+	// on — a slow call the user cancelled and replaced — can be dropped instead
+	// of overwriting the newer one.
+	callSeq int
+
+	// cancelCall aborts the call in flight, if any.
+	cancelCall context.CancelFunc
+
 	width  int
 	height int
 
 	discoveryTimeout time.Duration
+	callTimeout      time.Duration
 }
 
 // New builds the root model for a target.
-func New(client Discoverer, opts ...Option) Model {
+func New(client Client, opts ...Option) Model {
 	km := keys.Default()
 	st := styles.New()
 
@@ -141,14 +182,16 @@ func New(client Discoverer, opts ...Option) Model {
 		help:             helpModel,
 		spinner:          sp,
 		tree:             panels.NewTree(km, st),
-		detail:           panels.NewDetail(km, st),
+		request:          panels.NewForm(km, st),
+		response:         panels.NewResponse(km, st),
 		state:            stateConnecting,
 		discoveryTimeout: DefaultDiscoveryTimeout,
+		callTimeout:      DefaultCallTimeout,
 	}
 	for _, opt := range opts {
 		opt(&m)
 	}
-	m.tree.Focus()
+	m.syncFocus()
 	return m
 }
 
@@ -191,7 +234,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = nil
 		m.services = msg.services
 		m.tree.SetServices(msg.services)
-		m.detail.Clear()
+		m.request.Clear()
+		m.response.Clear()
 		m.layout()
 		m.logger.Info("services discovered",
 			zap.String("target", m.client.Target()),
@@ -209,22 +253,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case panels.MethodSelectedMsg:
-		// Focus deliberately stays on the tree: selecting fills the detail
-		// panel but does not move the user into it, so j/k keep walking the
-		// method list. Tab is how you enter the panel — the same way lazygit
-		// and k9s behave. (v0.2 revisits this, where the detail panel becomes
-		// an editable request form and entering it is the point.)
-		m.detail.SetMethod(msg.Service, msg.Method)
+		// Focus deliberately stays on the tree: selecting builds the request
+		// form but does not move the user into it, so j/k keep walking the
+		// method list. Tab is how you enter the form — the same way lazygit and
+		// k9s behave.
+		m.request.SetMethod(msg.Service, msg.Method)
+		m.response.SetMethod(msg.Method)
+		m.layout()
 		m.logger.Debug("method selected", zap.String("method", msg.Method.FullName))
 		return m, nil
 
+	case panels.SendRequestMsg:
+		return m, m.startCall(msg)
+
+	case callFinishedMsg:
+		return m.finishCall(msg)
+
 	case spinner.TickMsg:
-		if m.state != stateConnecting {
-			return m, nil
-		}
-		var cmd tea.Cmd
-		m.spinner, cmd = m.spinner.Update(msg)
-		return m, cmd
+		return m.tick(msg)
 	}
 
 	return m.updatePanels(msg)
@@ -233,6 +279,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // handleKey handles the keys the root model owns. It reports whether the key
 // was consumed, so panel keys fall through untouched.
 func (m *Model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
+	// These work everywhere, including inside a text field being edited: ctrl+c
+	// because there must always be a way out, and send and the panel switches
+	// because filling in the last field and firing the call is the whole
+	// workflow.
+	switch {
+	case key.Matches(msg, m.keys.ForceQuit):
+		return tea.Quit, true
+
+	case key.Matches(msg, m.keys.Send):
+		if m.state != stateReady {
+			return nil, true
+		}
+		return m.send(), true
+
+	case key.Matches(msg, m.keys.NextPanel):
+		return nil, m.movePanel(1)
+
+	case key.Matches(msg, m.keys.PrevPanel):
+		return nil, m.movePanel(-1)
+	}
+
+	// While a field is being edited every remaining key is a character, not a
+	// command — q types a q.
+	if m.request.Editing() {
+		return nil, false
+	}
+
 	switch {
 	case key.Matches(msg, m.keys.Quit):
 		return tea.Quit, true
@@ -247,14 +320,112 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 		m.err = nil
 		return tea.Batch(m.spinner.Tick, m.discover()), true
 
-	case key.Matches(msg, m.keys.NextPanel), key.Matches(msg, m.keys.PrevPanel):
-		if m.state != stateReady {
-			return nil, true
-		}
-		m.toggleFocus()
+	case key.Matches(msg, m.keys.Cancel) && m.response.InFlight():
+		m.abortCall()
 		return nil, true
 	}
 	return nil, false
+}
+
+// send builds a request from the form and starts the call, or leaves the form
+// showing why it could not.
+func (m *Model) send() tea.Cmd {
+	if m.response.InFlight() {
+		return nil
+	}
+
+	req, ok := m.request.Submit()
+	if !ok {
+		// The form grew an error row, so the split between it and the response
+		// panel has to be recomputed.
+		m.layout()
+		return nil
+	}
+	return m.startCall(req)
+}
+
+// startCall issues one unary call, tagged with a sequence number so that a
+// result the user has moved on from can be discarded.
+func (m *Model) startCall(req panels.SendRequestMsg) tea.Cmd {
+	m.abortCall()
+	m.callSeq++
+
+	ctx, cancel := context.WithTimeout(m.ctx, m.callTimeout)
+	m.cancelCall = cancel
+
+	m.logger.Info("calling method",
+		zap.String("target", m.client.Target()),
+		zap.String("method", req.Method.FullName),
+	)
+
+	tick := m.response.SetInFlight(req.Method)
+	m.layout()
+	return tea.Batch(tick, invoke(ctx, cancel, m.client, req, m.callSeq))
+}
+
+// invoke runs the call off the Update goroutine, decoding the response there
+// too so that the panel receives text and never a protobuf message.
+func invoke(ctx context.Context, cancel context.CancelFunc, client Invoker, req panels.SendRequestMsg, seq int) tea.Cmd {
+	return func() tea.Msg {
+		defer cancel()
+
+		resp, err := client.InvokeUnary(ctx, req.Method, req.Request)
+		if err != nil {
+			st, ok := grpcclient.StatusOf(err)
+			return callFinishedMsg{seq: seq, err: err, status: st, hasStatus: ok}
+		}
+
+		body, err := protoschema.MarshalJSON(resp.Message)
+		if err != nil {
+			return callFinishedMsg{seq: seq, err: err, duration: resp.Duration}
+		}
+		return callFinishedMsg{seq: seq, body: body, duration: resp.Duration}
+	}
+}
+
+func (m Model) finishCall(msg callFinishedMsg) (tea.Model, tea.Cmd) {
+	if msg.seq != m.callSeq {
+		m.logger.Debug("dropping stale call result", zap.Int("seq", msg.seq))
+		return m, nil
+	}
+	m.cancelCall = nil
+
+	if msg.err != nil {
+		m.response.SetFailure(msg.err.Error(), msg.status, msg.hasStatus, msg.duration)
+	} else {
+		m.response.SetSuccess(msg.body, msg.duration)
+	}
+	m.layout()
+	return m, nil
+}
+
+// abortCall cancels the call in flight, if any. The cancellation surfaces as an
+// ordinary failed call, so the panel needs no separate "cancelled" state.
+func (m *Model) abortCall() {
+	if m.cancelCall == nil {
+		return
+	}
+	m.cancelCall()
+	m.cancelCall = nil
+}
+
+// tick feeds a spinner tick to whichever spinner it belongs to. Each
+// spinner.Model ignores ticks that are not its own, so both can be fed
+// unconditionally.
+func (m Model) tick(msg spinner.TickMsg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+
+	if m.state == stateConnecting {
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		cmds = append(cmds, cmd)
+	}
+
+	var cmd tea.Cmd
+	m.response, cmd = m.response.Update(msg)
+	cmds = append(cmds, cmd)
+
+	return m, tea.Batch(cmds...)
 }
 
 func (m Model) updatePanels(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -268,29 +439,44 @@ func (m Model) updatePanels(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.tree, cmd = m.tree.Update(msg)
 	cmds = append(cmds, cmd)
 
-	m.detail, cmd = m.detail.Update(msg)
+	m.request, cmd = m.request.Update(msg)
 	cmds = append(cmds, cmd)
+
+	m.response, cmd = m.response.Update(msg)
+	cmds = append(cmds, cmd)
+
+	// Editing a field changes how tall the form wants to be only when it grows
+	// a hint row, but recomputing is cheap and getting it wrong leaves the
+	// panels overlapping.
+	m.layout()
 
 	return m, tea.Batch(cmds...)
 }
 
-func (m *Model) toggleFocus() {
-	if m.focus == focusTree {
-		m.focus = focusDetail
-	} else {
-		m.focus = focusTree
+// movePanel cycles focus. It reports the key as consumed even before discovery
+// lands, so tab never leaks through to a panel that is not on screen.
+func (m *Model) movePanel(delta int) bool {
+	if m.state != stateReady {
+		return true
 	}
+	m.focus = focus((int(m.focus) + delta + focusCount) % focusCount)
 	m.syncFocus()
+	return true
 }
 
 func (m *Model) syncFocus() {
-	if m.focus == focusTree {
-		m.tree.Focus()
-		m.detail.Blur()
-		return
-	}
 	m.tree.Blur()
-	m.detail.Focus()
+	m.request.Blur()
+	m.response.Blur()
+
+	switch m.focus {
+	case focusRequest:
+		m.request.Focus()
+	case focusResponse:
+		m.response.Focus()
+	default:
+		m.tree.Focus()
+	}
 }
 
 // View renders the whole screen.
@@ -313,11 +499,16 @@ func (m Model) View() string {
 }
 
 func (m Model) readyView() string {
-	treeW, detailW, panelH := m.panelSizes()
+	l := m.computeLayout()
+
+	right := lipgloss.JoinVertical(lipgloss.Left,
+		m.framePanel("Request", m.request.View(), l.rightW, l.requestH, m.request.Focused()),
+		m.framePanel("Response", m.response.View(), l.rightW, l.responseH, m.response.Focused()),
+	)
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top,
-		m.framePanel("Services", m.tree.View(), treeW, panelH, m.tree.Focused()),
-		m.framePanel("Method", m.detail.View(), detailW, panelH, m.detail.Focused()),
+		m.framePanel("Services", m.tree.View(), l.treeW, l.bodyH, m.tree.Focused()),
+		right,
 	)
 
 	return strings.Join([]string{body, m.statusBar(), m.help.View(m.keys)}, "\n")
@@ -348,8 +539,8 @@ func (m Model) framePanel(title, body string, width, height int, focused bool) s
 		Render(body)
 
 	return style.
-		Width(width - style.GetHorizontalBorderSize()).
-		Height(height - style.GetVerticalBorderSize()).
+		Width(max(width-style.GetHorizontalBorderSize(), 0)).
+		Height(max(height-style.GetVerticalBorderSize(), 0)).
 		Render(titleLine + "\n" + body)
 }
 
@@ -409,33 +600,65 @@ func (m Model) centred(content string) string {
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
 }
 
-// layout recomputes panel sizes; called whenever anything that affects the
-// available space changes.
-func (m *Model) layout() {
-	treeW, detailW, panelH := m.panelSizes()
-
-	w, h := innerSize(m.styles.Panel, treeW, panelH)
-	m.tree.SetSize(w, h)
-
-	w, h = innerSize(m.styles.Panel, detailW, panelH)
-	m.detail.SetSize(w, h)
+// layoutSizes is the geometry of one frame: a service tree down the left, the
+// request form over the response down the right.
+type layoutSizes struct {
+	treeW     int
+	rightW    int
+	bodyH     int
+	requestH  int
+	responseH int
 }
 
-// panelSizes splits the screen: a service tree on the left, detail on the
-// right, with the status and help bars taking the bottom rows.
-func (m Model) panelSizes() (treeW, detailW, panelH int) {
+// layout recomputes panel sizes; called whenever anything that affects the
+// available space changes — including the form growing a row, which steals
+// height from the response.
+func (m *Model) layout() {
+	l := m.computeLayout()
+
+	w, h := innerSize(m.styles.Panel, l.treeW, l.bodyH)
+	m.tree.SetSize(w, h)
+
+	w, h = innerSize(m.styles.Panel, l.rightW, l.requestH)
+	m.request.SetSize(w, h)
+
+	w, h = innerSize(m.styles.Panel, l.rightW, l.responseH)
+	m.response.SetSize(w, h)
+}
+
+func (m Model) computeLayout() layoutSizes {
 	const (
-		minTreeWidth = 24
-		maxTreeWidth = 48
+		minTreeWidth   = 24
+		maxTreeWidth   = 48
+		minPanelHeight = 3
 	)
 
-	treeW = min(max(m.width*2/5, minTreeWidth), maxTreeWidth)
-	treeW = min(treeW, m.width)
-	detailW = m.width - treeW
+	l := layoutSizes{}
+	l.treeW = min(max(m.width*2/5, minTreeWidth), maxTreeWidth)
+	l.treeW = min(l.treeW, m.width)
+	l.rightW = m.width - l.treeW
 
 	// The status bar takes one row; the help bar takes however many it needs.
-	panelH = max(m.height-1-lipgloss.Height(m.help.View(m.keys)), 3)
-	return treeW, detailW, panelH
+	l.bodyH = max(m.height-1-lipgloss.Height(m.help.View(m.keys)), minPanelHeight)
+
+	// The form gets the height it asks for and the response takes the rest: a
+	// three-field request should not reserve half the screen.
+	chrome := m.styles.Panel.GetVerticalBorderSize() + m.styles.Panel.GetVerticalPadding() + 1
+	l.requestH, l.responseH = splitHeight(l.bodyH, m.request.ContentHeight()+chrome, minPanelHeight)
+	return l
+}
+
+// splitHeight divides the right-hand column, giving the top panel the height it
+// wants within what is left after the bottom one's minimum. A column too short
+// to satisfy both minimums is halved instead, because a panel of zero rows
+// renders as a broken box rather than as nothing.
+func splitHeight(total, want, minEach int) (top, bottom int) {
+	if total < 2*minEach {
+		top = total / 2
+		return top, total - top
+	}
+	top = min(max(want, minEach), total-minEach)
+	return top, total - top
 }
 
 // wrap hard-wraps text to width on whitespace.

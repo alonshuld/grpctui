@@ -24,6 +24,10 @@ type KeyMap struct {
 	Select   key.Binding
 	Expand   key.Binding
 	Collapse key.Binding
+	Toggle   key.Binding
+
+	Send   key.Binding
+	Cancel key.Binding
 
 	NextPanel key.Binding
 	PrevPanel key.Binding
@@ -31,6 +35,12 @@ type KeyMap struct {
 	Retry key.Binding
 	Help  key.Binding
 	Quit  key.Binding
+
+	// ForceQuit is the one binding that works everywhere, including while a
+	// text field is being edited — where q is a character, not a command. It is
+	// deliberately absent from the help views: Quit already documents "quit",
+	// and ctrl+c needs no teaching.
+	ForceQuit key.Binding
 }
 
 // Default returns the built-in keybindings.
@@ -62,7 +72,7 @@ func Default() KeyMap {
 		),
 		Select: key.NewBinding(
 			key.WithKeys("enter"),
-			key.WithHelp("enter", "select"),
+			key.WithHelp("enter", "select/edit"),
 		),
 		Expand: key.NewBinding(
 			key.WithKeys("right", "l"),
@@ -71,6 +81,18 @@ func Default() KeyMap {
 		Collapse: key.NewBinding(
 			key.WithKeys("left", "h"),
 			key.WithHelp("←/h", "collapse"),
+		),
+		Toggle: key.NewBinding(
+			key.WithKeys(" "),
+			key.WithHelp("space", "toggle"),
+		),
+		Send: key.NewBinding(
+			key.WithKeys("ctrl+s"),
+			key.WithHelp("ctrl+s", "send"),
+		),
+		Cancel: key.NewBinding(
+			key.WithKeys("esc"),
+			key.WithHelp("esc", "cancel"),
 		),
 		NextPanel: key.NewBinding(
 			key.WithKeys("tab"),
@@ -89,15 +111,19 @@ func Default() KeyMap {
 			key.WithHelp("?", "help"),
 		),
 		Quit: key.NewBinding(
-			key.WithKeys("q", "ctrl+c"),
+			key.WithKeys("q"),
 			key.WithHelp("q", "quit"),
+		),
+		ForceQuit: key.NewBinding(
+			key.WithKeys("ctrl+c"),
+			key.WithHelp("ctrl+c", "quit"),
 		),
 	}
 }
 
 // ShortHelp implements help.KeyMap: the single-line help bar.
 func (k KeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.Select, k.NextPanel, k.Help, k.Quit}
+	return []key.Binding{k.Up, k.Down, k.Select, k.Send, k.NextPanel, k.Help, k.Quit}
 }
 
 // FullHelp implements help.KeyMap: the expanded help view, one column per
@@ -105,7 +131,8 @@ func (k KeyMap) ShortHelp() []key.Binding {
 func (k KeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.PageUp, k.PageDown, k.Top, k.Bottom},
-		{k.Select, k.Expand, k.Collapse},
+		{k.Select, k.Expand, k.Collapse, k.Toggle},
+		{k.Send, k.Cancel},
 		{k.NextPanel, k.PrevPanel},
 		{k.Retry, k.Help, k.Quit},
 	}

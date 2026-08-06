@@ -1,6 +1,10 @@
 package ui
 
-import "github.com/alonshuld/grpctui/internal/grpcclient"
+import (
+	"time"
+
+	"github.com/alonshuld/grpctui/internal/grpcclient"
+)
 
 // servicesDiscoveredMsg carries the result of a successful reflection sweep.
 type servicesDiscoveredMsg struct {
@@ -12,4 +16,23 @@ type servicesDiscoveredMsg struct {
 // "nothing is listening".
 type discoveryFailedMsg struct {
 	err error
+}
+
+// callFinishedMsg carries the outcome of one unary call. The response is
+// already rendered as JSON: decoding happens in the command, not in Update.
+type callFinishedMsg struct {
+	// seq identifies the call. A message whose seq is not the model's current
+	// one belongs to a call the user has moved on from and is dropped.
+	seq int
+
+	// body is the response rendered as JSON, set only on success.
+	body string
+
+	// err is the call's failure, if any. status and hasStatus carry its gRPC
+	// status, when it had one — a request that never reached the wire does not.
+	err       error
+	status    grpcclient.CallStatus
+	hasStatus bool
+
+	duration time.Duration
 }

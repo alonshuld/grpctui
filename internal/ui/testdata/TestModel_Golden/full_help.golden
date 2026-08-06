@@ -1,10 +1,10 @@
 ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓╭──────────────────────────────────────────────────────────╮
-┃ Services                             ┃│ Method                                                   │
-┃ ❯ ▾ demo.v1.Echo                     ┃│ Select a method to see its signature.                    │
-┃      Echo                            ┃│                                                          │
-┃   ▾ demo.v1.Greeter                  ┃│                                                          │
-┃      SayHello                        ┃│                                                          │
-┃      SayHelloStream «stream          ┃│                                                          │
+┃ Services                             ┃│ Request                                                  │
+┃ ❯ ▾ demo.v1.Echo                     ┃│ Select a method to build a request.                      │
+┃      Echo                            ┃╰──────────────────────────────────────────────────────────╯
+┃   ▾ demo.v1.Greeter                  ┃╭──────────────────────────────────────────────────────────╮
+┃      SayHello                        ┃│ Response                                                 │
+┃      SayHelloStream «stream          ┃│ Send a request to see the response.                      │
 ┃                                      ┃│                                                          │
 ┃                                      ┃│                                                          │
 ┃                                      ┃│                                                          │
@@ -16,9 +16,9 @@
 ┃                                      ┃│                                                          │
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛╰──────────────────────────────────────────────────────────╯
  localhost:50051  •  2 services  •  3 methods 
-↑/k    up           enter select      tab       next panel    r retry
-↓/j    down         →/l   expand      shift+tab prev panel    ? help 
-ctrl+u page up      ←/h   collapse                            q quit 
-ctrl+d page down                                                     
-g      top                                                           
-G      bottom                                                        
+↑/k    up           enter select/edit    ctrl+s send      tab       next panel    r retry
+↓/j    down         →/l   expand         esc    cancel    shift+tab prev panel    ? help 
+ctrl+u page up      ←/h   collapse                                                q quit 
+ctrl+d page down    space toggle                                                         
+g      top                                                                               
+G      bottom                                                                            

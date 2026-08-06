@@ -14,6 +14,7 @@ type Palette struct {
 	Muted     lipgloss.TerminalColor
 	Border    lipgloss.TerminalColor
 	Error     lipgloss.TerminalColor
+	Success   lipgloss.TerminalColor
 	Text      lipgloss.TerminalColor
 	Inverted  lipgloss.TerminalColor
 }
@@ -26,6 +27,7 @@ func DefaultPalette() Palette {
 		Muted:     lipgloss.AdaptiveColor{Light: "#6C6C6C", Dark: "#8A8A8A"},
 		Border:    lipgloss.AdaptiveColor{Light: "#C0C0C0", Dark: "#4A4A4A"},
 		Error:     lipgloss.AdaptiveColor{Light: "#B00020", Dark: "#FF6B6B"},
+		Success:   lipgloss.AdaptiveColor{Light: "#1B7F3B", Dark: "#6FD48A"},
 		Text:      lipgloss.AdaptiveColor{Light: "#1A1A1A", Dark: "#E4E4E4"},
 		Inverted:  lipgloss.AdaptiveColor{Light: "#FFFFFF", Dark: "#1A1A1A"},
 	}
@@ -50,6 +52,15 @@ type Styles struct {
 	Value  lipgloss.Style
 	Muted  lipgloss.Style
 	Status lipgloss.Style
+
+	FieldName     lipgloss.Style
+	FieldType     lipgloss.Style
+	FieldValue    lipgloss.Style
+	FieldDisabled lipgloss.Style
+	FieldError    lipgloss.Style
+
+	StatusOK    lipgloss.Style
+	StatusError lipgloss.Style
 
 	ErrorTitle lipgloss.Style
 	ErrorBody  lipgloss.Style
@@ -88,6 +99,15 @@ func New() Styles {
 		Value:  lipgloss.NewStyle().Foreground(p.Text),
 		Muted:  lipgloss.NewStyle().Foreground(p.Muted),
 		Status: lipgloss.NewStyle().Foreground(p.Muted).Padding(0, 1),
+
+		FieldName:     lipgloss.NewStyle().Foreground(p.Text),
+		FieldType:     lipgloss.NewStyle().Foreground(p.Muted),
+		FieldValue:    lipgloss.NewStyle().Foreground(p.Secondary),
+		FieldDisabled: lipgloss.NewStyle().Foreground(p.Muted).Italic(true),
+		FieldError:    lipgloss.NewStyle().Foreground(p.Error),
+
+		StatusOK:    lipgloss.NewStyle().Bold(true).Foreground(p.Success),
+		StatusError: lipgloss.NewStyle().Bold(true).Foreground(p.Error),
 
 		ErrorTitle: lipgloss.NewStyle().Bold(true).Foreground(p.Error),
 		ErrorBody:  lipgloss.NewStyle().Foreground(p.Text),

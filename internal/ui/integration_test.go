@@ -32,8 +32,8 @@ func TestIntegration_DiscoverAndBrowseARealServer(t *testing.T) {
 	assert.Contains(t, view, "Check")
 	assert.Contains(t, view, "Watch «stream", "Watch is server-streaming")
 
-	// Walk down to Check and select it; the detail panel should describe the
-	// real descriptor, not a fixture.
+	// Walk down to Check and select it; the request form should be built from
+	// the real descriptor, not a fixture.
 	m, cmd := press(t, m, "j", "enter")
 	require.NotNil(t, cmd)
 	m = asModel(t, mustUpdate(m, cmd()))
@@ -42,6 +42,50 @@ func TestIntegration_DiscoverAndBrowseARealServer(t *testing.T) {
 	assert.Contains(t, view, "grpc.health.v1.HealthCheckRequest")
 	assert.Contains(t, view, "grpc.health.v1.HealthCheckResponse")
 	assert.Contains(t, view, "unary")
+	assert.Contains(t, view, "service", "the form found HealthCheckRequest's one field")
+}
+
+// The whole v0.2 cycle over a real server: discover, fill the form, send, and
+// read the decoded response — with the real grpcclient, real reflection, real
+// dynamic invocation, and a real protobuf response.
+func TestIntegration_SendAUnaryRequest(t *testing.T) {
+	client := realClient(t)
+	m := settled(t, ui.New(client, ui.WithLogger(zaptest.NewLogger(t))))
+
+	// grpc.health.v1.Health is the only service; Check is its first method.
+	m = selectMethod(t, m, 1)
+	require.Contains(t, m.View(), "grpc.health.v1.Health.Check")
+
+	m, cmd := press(t, m, "ctrl+s")
+	require.NotNil(t, cmd, "ctrl+s must start a call")
+	m = apply(t, m, cmd)
+
+	view := m.View()
+	assert.Contains(t, view, "OK")
+	assert.Contains(t, view, `"status": "SERVING"`,
+		"the health server's response did not reach the panel:\n%s", view)
+}
+
+// A server answering NotFound is the service working correctly, and the status
+// has to arrive intact rather than as a generic failure.
+func TestIntegration_UnaryRequestWithAFailingStatus(t *testing.T) {
+	client := realClient(t)
+	m := settled(t, ui.New(client, ui.WithLogger(zaptest.NewLogger(t))))
+
+	m = selectMethod(t, m, 1)
+
+	// Ask after a service the health server has never heard of.
+	m, _ = press(t, m, "enter")
+	m = typeText(t, m, "no.such.Service")
+	m, _ = press(t, m, "esc")
+
+	m, cmd := press(t, m, "ctrl+s")
+	require.NotNil(t, cmd)
+	m = apply(t, m, cmd)
+
+	view := m.View()
+	assert.Contains(t, view, "NotFound (5)")
+	assert.NotContains(t, view, "OK  ")
 }
 
 func TestIntegration_ReflectionUnavailable(t *testing.T) {
