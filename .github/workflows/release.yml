@@ -13,12 +13,12 @@ jobs:
     name: Release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # GoReleaser builds the changelog from commits since the last tag.
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.26"
           cache: true
@@ -28,12 +28,14 @@ jobs:
         run: go test -race ./...
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v8
+        uses: golangci/golangci-lint-action@v9
         with:
-          version: latest
+          # Pinned, not "latest": CI and `make check` must agree on what a lint
+          # failure is, and a silent upstream bump should not turn a green PR red.
+          version: v2.12.2
 
       - name: GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2"
           args: release --clean
