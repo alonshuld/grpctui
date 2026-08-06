@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  # A branch with an open PR would otherwise run the whole matrix twice, once
+  # per trigger. Branch pushes are covered by pull_request; the push trigger is
+  # what guards main itself.
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    # Windows runners default to PowerShell, which mangles `-flag=value` into
+    # separate arguments — `-coverprofile=coverage.out` reached go as a stray
+    # `.out` package pattern. bash ships on all three runner images, so one
+    # shell keeps every step behaving identically.
+    shell: bash
+
+jobs:
+  static:
+    name: Static analysis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26"
+          cache: true
+
+      - name: gofmt
+        run: |
+          # agent/ holds vendored skill packs with their own module.
+          unformatted=$(gofmt -l . | grep -v '^agent/' || true)
+          if [ -n "$unformatted" ]; then
+            echo "not gofmt-clean:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          # Pinned, not "latest": CI and `make check` must agree on what a lint
+          # failure is, and a silent upstream bump should not turn a green PR red.
+          version: v2.12.2
+
+  test:
+    name: Test (${{ matrix.os }}, go${{ matrix.go }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        go: ["1.25", "1.26"]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ matrix.go }}
+          cache: true
+
+      - name: Build
+        run: go build ./...
+
+      # -race is on for every run, not just before a release tag.
+      - name: Test
+        run: go test -race -coverprofile=coverage.out ./...
+
+      - name: Upload coverage
+        if: matrix.os == 'ubuntu-latest' && matrix.go == '1.26'
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: coverage.out

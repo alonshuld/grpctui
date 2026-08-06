@@ -1,0 +1,24 @@
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓╭──────────────────────────────────────────────────────────╮
+┃ Services                             ┃│ Method                                                   │
+┃ ❯ ▾ demo.v1.Echo                     ┃│ Select a method to see its signature.                    │
+┃      Echo                            ┃│                                                          │
+┃   ▾ demo.v1.Greeter                  ┃│                                                          │
+┃      SayHello                        ┃│                                                          │
+┃      SayHelloStream «stream          ┃│                                                          │
+┃                                      ┃│                                                          │
+┃                                      ┃│                                                          │
+┃                                      ┃│                                                          │
+┃                                      ┃│                                                          │
+┃                                      ┃│                                                          │
+┃                                      ┃│                                                          │
+┃                                      ┃│                                                          │
+┃                                      ┃│                                                          │
+┃                                      ┃│                                                          │
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛╰──────────────────────────────────────────────────────────╯
+ localhost:50051  •  2 services  •  3 methods 
+↑/k    up           enter select      tab       next panel    r retry
+↓/j    down         →/l   expand      shift+tab prev panel    ? help 
+ctrl+u page up      ←/h   collapse                            q quit 
+ctrl+d page down                                                     
+g      top                                                           
+G      bottom                                                        

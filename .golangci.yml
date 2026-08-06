@@ -1,0 +1,136 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 50
+
+linters:
+  enable:
+    # correctness
+    - govet
+    - staticcheck
+    - unused
+    - errcheck
+    - errorlint
+    - nilerr
+    - forcetypeassert
+    - copyloopvar
+    - durationcheck
+    - reassign
+    # style
+    - gocritic
+    - revive
+    - whitespace
+    - godot
+    - misspell
+    - dupword
+    - predeclared
+    - errname
+    - asciicheck
+    # complexity
+    - gocyclo
+    - nestif
+    - funlen
+    - dupl
+    # performance
+    - perfsprint
+    - unconvert
+    - ineffassign
+    - goconst
+    # security & resources
+    - gosec
+    - bidichk
+    - containedctx
+    - fatcontext
+    # logging
+    - loggercheck
+    # testing
+    - testifylint
+    - thelper
+    - usetesting
+    # modernization & meta
+    - modernize
+    - exptostd
+    - intrange
+    - usestdlibvars
+    - exhaustive
+    - nolintlint
+
+  disable:
+    # Not applicable to this project: no SQL, no HTTP server, no slog, no
+    # zerolog. Listed explicitly so the reason survives a config refresh.
+    - sqlclosecheck
+    - rowserrcheck
+    - bodyclose
+    - noctx
+    - sloglint
+    - zerologlint
+    - spancheck
+    - protogetter
+    # The UI tests swap os.Stdout and share lipgloss's global renderer, so
+    # they cannot run in parallel.
+    - paralleltest
+    # Deliberate project choices.
+    - lll
+    - wrapcheck
+    - err113
+    - mnd
+    - exhaustruct
+    - varnamelen
+    - gochecknoglobals
+    - testpackage
+
+  exclusions:
+    generated: lax
+    paths:
+      # Vendored skill packs, not this module's code.
+      - "^agent/"
+      - third_party$
+    rules:
+      # Table-driven tests across packages look alike by construction.
+      - path: _test\.go
+        linters:
+          - dupl
+          - funlen
+          - goconst
+          - gosec
+      # The bubbletea Update/View switch is a dispatch table; splitting it to
+      # satisfy a complexity budget makes it harder to read, not easier.
+      - path: internal/ui/model\.go
+        linters:
+          - gocyclo
+
+  settings:
+    dupl:
+      threshold: 150
+    errcheck:
+      check-type-assertions: true
+    funlen:
+      lines: 120
+      statements: 80
+    goconst:
+      min-len: 3
+      min-occurrences: 4
+    gocyclo:
+      min-complexity: 13
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+    exhaustive:
+      default-signifies-exhaustive: true
+
+formatters:
+  enable:
+    - gofmt
+    - gofumpt
+  settings:
+    gofumpt:
+      extra-rules: true
+  exclusions:
+    generated: lax
+    paths:
+      - "^agent/"

@@ -1,0 +1,24 @@
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                   Server reflection unavailable                                    
+                                                                                                    
+              list services: server reflection is not available on this target: rpc                 
+              error: code = Unimplemented desc = unknown service                                    
+              grpc.reflection.v1.ServerReflection                                                   
+                                                                                                    
+                  The target is reachable but does not serve the reflection API.                    
+                  Enable reflection on the server, or use .proto-file mode (v0.9).                  
+                                                                                                    
+                                          r retry • q quit                                          
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    

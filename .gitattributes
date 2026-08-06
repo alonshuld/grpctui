@@ -1,0 +1,13 @@
+# Windows runners check out with core.autocrlf=true. Golden files are compared
+# byte for byte, so a CRLF rewrite would fail every teatest assertion on
+# Windows and nowhere else.
+*.golden -text
+
+# Go tooling assumes LF, and the pre-push hook is run by sh.
+*.go text eol=lf
+*.mod text eol=lf
+*.sum text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+scripts/hooks/* text eol=lf
+Makefile text eol=lf
