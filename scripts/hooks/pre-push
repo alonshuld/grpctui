@@ -1,0 +1,28 @@
+#!/bin/sh
+#
+# grpctui pre-push hook — the fast local mirror of CI.
+#
+# It deliberately omits `-race` and the lint pass to stay under a few seconds;
+# CI remains the authority. Install with `make hooks`.
+#
+# Do not bypass this with --no-verify. If the hook is wrong, fix the hook.
+
+set -e
+
+echo "pre-push: gofmt"
+# agent/ holds vendored skill packs with their own module; not our code.
+unformatted=$(gofmt -l . | grep -v '^agent/' || true)
+if [ -n "$unformatted" ]; then
+	echo "pre-push: these files are not gofmt-clean:" >&2
+	echo "$unformatted" >&2
+	echo "pre-push: run 'make fmt'" >&2
+	exit 1
+fi
+
+echo "pre-push: go vet"
+go vet ./...
+
+echo "pre-push: go test"
+go test ./...
+
+echo "pre-push: ok"

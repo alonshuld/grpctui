@@ -8,6 +8,13 @@
 *.so
 *.dylib
 
+# Built binaries (rooted so a package named grpctui/ is never ignored)
+/grpctui
+/cmd/grpctui/grpctui
+
+# GoReleaser build output
+/dist/
+
 # Test binary, built with `go test -c`
 *.test
 
@@ -16,6 +23,7 @@
 coverage.*
 *.coverprofile
 profile.cov
+!**/testdata/**/*.out
 
 # Dependency directories (remove the comment below to include it)
 # vendor/
@@ -27,6 +35,39 @@ go.work.sum
 # env file
 .env
 
+# Runtime logs and state (zap writes to a file; see CLAUDE.md)
+*.log
+/grpctui.log
+
+# TLS material — never commit client certs or private keys (v0.4 mTLS).
+# Test fixtures under testdata/ are exempt: they must be committed for tests to run.
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+!**/testdata/**/*.pem
+!**/testdata/**/*.key
+!**/testdata/**/*.crt
+
+# AI/agent tooling — deliberately not part of the published repo.
+# NOTE: CLAUDE.md is ignored, so a fresh clone carries no project conventions.
+# Keep this file in sync manually across machines, or drop it from this list.
+# Rooted (/) so a Go package named agent/ or claude/ deeper in the tree is unaffected.
+/CLAUDE.md
+/CLAUDE.local.md
+/AGENTS.md
+/.claude/
+/.agents/
+/agent/
+/skills-lock.json
+/.mcp.json
+
 # Editor/IDE
-# .idea/
-# .vscode/
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
