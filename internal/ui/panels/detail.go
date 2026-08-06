@@ -30,10 +30,30 @@ type Detail struct {
 
 // NewDetail builds an empty detail panel.
 func NewDetail(km keys.KeyMap, st styles.Styles) Detail {
+	vp := viewport.New(0, 0)
+	vp.KeyMap = viewportKeys(km)
+
 	return Detail{
 		keys:     km,
 		styles:   st,
-		viewport: viewport.New(0, 0),
+		viewport: vp,
+	}
+}
+
+// viewportKeys maps grpctui's keymap onto the viewport's own.
+//
+// bubbles/viewport ships a default keymap of its own (u/d/b/f, h/l, arrows).
+// Left as-is it would put scroll bindings outside the single keymap: absent
+// from the `?` help, unreachable by the v0.9 remapping feature, and — for h
+// and l — bound to something other than the expand/collapse they mean
+// everywhere else. Bindings with no grpctui equivalent are left disabled
+// rather than silently keeping their defaults.
+func viewportKeys(km keys.KeyMap) viewport.KeyMap {
+	return viewport.KeyMap{
+		Up:       km.Up,
+		Down:     km.Down,
+		PageUp:   km.PageUp,
+		PageDown: km.PageDown,
 	}
 }
 
