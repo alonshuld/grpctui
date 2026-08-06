@@ -1,8 +1,11 @@
 name: CI
 
 on:
+  # A branch with an open PR would otherwise run the whole matrix twice, once
+  # per trigger. Branch pushes are covered by pull_request; the push trigger is
+  # what guards main itself.
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
     branches: [main]
 
@@ -12,6 +15,14 @@ permissions:
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
+
+defaults:
+  run:
+    # Windows runners default to PowerShell, which mangles `-flag=value` into
+    # separate arguments — `-coverprofile=coverage.out` reached go as a stray
+    # `.out` package pattern. bash ships on all three runner images, so one
+    # shell keeps every step behaving identically.
+    shell: bash
 
 jobs:
   static:
