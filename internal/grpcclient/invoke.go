@@ -44,12 +44,19 @@ type CallStatus struct {
 	Message string
 }
 
-// String renders the status the way the response panel shows it.
+// CodeName renders the code alone, "NotFound (5)". It is what the response
+// panel puts on its status line, with the server's message going in the body
+// underneath rather than alongside.
+func (s CallStatus) CodeName() string {
+	return fmt.Sprintf("%s (%d)", s.Name, s.Code)
+}
+
+// String renders the whole status on one line, for a log or an error.
 func (s CallStatus) String() string {
 	if s.Message == "" {
-		return fmt.Sprintf("%s (%d)", s.Name, s.Code)
+		return s.CodeName()
 	}
-	return fmt.Sprintf("%s (%d): %s", s.Name, s.Code, s.Message)
+	return s.CodeName() + ": " + s.Message
 }
 
 // StatusOf extracts the gRPC status carried by err, if it has one. It reports
