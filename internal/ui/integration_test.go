@@ -5,6 +5,7 @@ import (
 	"net"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap/zaptest"
@@ -86,6 +87,37 @@ func TestIntegration_UnaryRequestWithAFailingStatus(t *testing.T) {
 	view := m.View()
 	assert.Contains(t, view, "NotFound (5)")
 	assert.NotContains(t, view, "OK  ")
+}
+
+// The v0.5 cycle over a real server: open a real server-streaming call against
+// the health service's Watch, see a real protobuf message arrive on it, and
+// stop it with the one keybinding that does.
+func TestIntegration_WatchAServerStream(t *testing.T) {
+	client := realClient(t)
+	m := settled(t, ui.New(client, ui.WithLogger(zaptest.NewLogger(t))))
+
+	// grpc.health.v1.Health is discovered first; Watch is its third method,
+	// after Check and List.
+	m = selectMethod(t, m, 3)
+	require.Contains(t, m.View(), "grpc.health.v1.Health.Watch")
+
+	next, _ := m.Update(tea.WindowSizeMsg{Width: termWidth, Height: streamTermHeight})
+	h := newHarness(t, asModel(t, next))
+
+	h.press("ctrl+s")
+
+	view := h.view()
+	require.Contains(t, view, "Watching", "the stream did not open:\n%s", view)
+	assert.Contains(t, view, "← 1", "the server's first message did not arrive:\n%s", view)
+	assert.Contains(t, view, `"status": "SERVING"`)
+
+	// Watch stays open until something stops it, which is the point of the
+	// keybinding — and of the stream having no timeout of its own.
+	h.press("esc")
+
+	view = h.view()
+	assert.Contains(t, view, "Canceled")
+	assert.Contains(t, view, `"status": "SERVING"`, "the log survives the cancellation")
 }
 
 func TestIntegration_ReflectionUnavailable(t *testing.T) {

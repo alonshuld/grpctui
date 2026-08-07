@@ -38,7 +38,13 @@ import (
 //	service Greeter {
 //	  rpc SayHello(HelloRequest) returns (HelloReply);
 //	  rpc SayHelloStream(HelloRequest) returns (stream HelloReply);
+//	  rpc CollectHellos(stream HelloRequest) returns (HelloReply);
+//	  rpc Converse(stream HelloRequest) returns (stream HelloReply);
 //	}
+//
+// All four method kinds are present on purpose: from v0.5 each one is driven
+// differently, and a fixture with only unary and server-streaming methods would
+// let the other two paths go untested.
 //
 // The descriptors are real, so the request form built from them is real too —
 // which is the whole point: a fixture with no descriptor would let a broken
@@ -144,14 +150,16 @@ func demoFileProto() *descriptorpb.FileDescriptorProto {
 			{
 				Name: proto.String("Echo"),
 				Method: []*descriptorpb.MethodDescriptorProto{
-					rpc("Echo", "."+pkg+".EchoRequest", "."+pkg+".EchoReply", false),
+					rpc("Echo", "."+pkg+".EchoRequest", "."+pkg+".EchoReply", false, false),
 				},
 			},
 			{
 				Name: proto.String("Greeter"),
 				Method: []*descriptorpb.MethodDescriptorProto{
-					rpc("SayHello", "."+pkg+".HelloRequest", "."+pkg+".HelloReply", false),
-					rpc("SayHelloStream", "."+pkg+".HelloRequest", "."+pkg+".HelloReply", true),
+					rpc("SayHello", "."+pkg+".HelloRequest", "."+pkg+".HelloReply", false, false),
+					rpc("SayHelloStream", "."+pkg+".HelloRequest", "."+pkg+".HelloReply", false, true),
+					rpc("CollectHellos", "."+pkg+".HelloRequest", "."+pkg+".HelloReply", true, false),
+					rpc("Converse", "."+pkg+".HelloRequest", "."+pkg+".HelloReply", true, true),
 				},
 			},
 		},
@@ -193,11 +201,14 @@ func oneofField(f *descriptorpb.FieldDescriptorProto, index int32) *descriptorpb
 	return f
 }
 
-func rpc(name, in, out string, serverStreaming bool) *descriptorpb.MethodDescriptorProto {
+func rpc(name, in, out string, clientStreaming, serverStreaming bool) *descriptorpb.MethodDescriptorProto {
 	m := &descriptorpb.MethodDescriptorProto{
 		Name:       proto.String(name),
 		InputType:  proto.String(in),
 		OutputType: proto.String(out),
+	}
+	if clientStreaming {
+		m.ClientStreaming = proto.Bool(true)
 	}
 	if serverStreaming {
 		m.ServerStreaming = proto.Bool(true)

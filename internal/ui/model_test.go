@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -47,6 +49,15 @@ type fakeClient struct {
 	invoke      func(ctx context.Context, method grpcclient.Method, req proto.Message) (*grpcclient.UnaryResponse, error)
 	invocations atomic.Int32
 
+	// streamErr, when set, is why no stream can be opened.
+	streamErr error
+
+	// streams carries every stream the client has opened, so a test can take
+	// hold of one and play the server's half of the conversation. It is
+	// buffered: opening happens on a tea.Cmd's goroutine, which must not block
+	// waiting for the test to catch up.
+	streams chan *fakeStream
+
 	// mu guards the headers each half of the transport layer was handed, which
 	// the tea.Cmds behind discovery and invocation write from their own
 	// goroutines.
@@ -87,6 +98,143 @@ func (f *fakeClient) InvokeUnary(ctx context.Context, method grpcclient.Method, 
 	}, nil
 }
 
+func (f *fakeClient) InvokeStream(ctx context.Context, method grpcclient.Method, md grpcclient.Metadata) (grpcclient.Stream, error) {
+	f.invocations.Add(1)
+	f.record(&f.invocationMD, md)
+
+	if f.streamErr != nil {
+		return nil, f.streamErr
+	}
+
+	s := &fakeStream{
+		method:   method,
+		ctx:      ctx,
+		incoming: make(chan streamReply, 64),
+	}
+
+	// Non-blocking, so that a fake nobody has given a channel to — most of them,
+	// since most tests never stream — cannot wedge a command's goroutine.
+	select {
+	case f.streams <- s:
+	default:
+	}
+	return s, nil
+}
+
+// stream returns the stream the client most recently opened, waiting for it to
+// appear: opening happens on a command's goroutine, so it is not there the
+// instant the keystroke is handled.
+func (f *fakeClient) stream(t *testing.T) *fakeStream {
+	t.Helper()
+
+	select {
+	case s := <-f.streams:
+		return s
+	case <-time.After(3 * time.Second):
+		t.Fatal("no stream was opened")
+		return nil
+	}
+}
+
+// streamReply is one scripted answer from the server: a message, or the error
+// that ends the stream — io.EOF for a stream that finished cleanly.
+type streamReply struct {
+	msg proto.Message
+	err error
+}
+
+// fakeStream stands in for a streaming call. A test scripts what the server
+// says with [fakeStream.reply], and asserts afterwards on what went out.
+type fakeStream struct {
+	method grpcclient.Method
+
+	// ctx is the stream's own context, so that cancelling it — which is what esc
+	// does — ends a blocked Recv exactly as a real stream's would.
+	//
+	//nolint:containedctx // the fake stands in for a call, which is context-bound.
+	ctx context.Context
+
+	// incoming is what Recv hands out, in order. Recv blocks on it when it is
+	// empty, which is what an open stream with nothing to say looks like.
+	incoming chan streamReply
+
+	mu         sync.Mutex
+	sent       []proto.Message
+	closedSend bool
+	closes     int
+	sendErr    error
+}
+
+func (s *fakeStream) Method() grpcclient.Method { return s.method }
+
+func (s *fakeStream) Send(req proto.Message) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closedSend {
+		return fmt.Errorf("send: %w", grpcclient.ErrSendClosed)
+	}
+	if s.sendErr != nil {
+		return s.sendErr
+	}
+	s.sent = append(s.sent, req)
+	return nil
+}
+
+func (s *fakeStream) CloseSend() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closedSend = true
+	return nil
+}
+
+func (s *fakeStream) Recv() (proto.Message, error) {
+	select {
+	case r := <-s.incoming:
+		return r.msg, r.err
+	case <-s.ctx.Done():
+		return nil, fmt.Errorf("stream %s: %w", s.method.FullName,
+			status.Error(codes.Canceled, "context canceled"))
+	}
+}
+
+func (s *fakeStream) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closes++
+	return nil
+}
+
+// reply scripts one message from the server.
+func (s *fakeStream) reply(msg proto.Message) { s.incoming <- streamReply{msg: msg} }
+
+// finish scripts the clean end of the stream.
+func (s *fakeStream) finish() { s.incoming <- streamReply{err: io.EOF} }
+
+// fail scripts the stream ending on an error.
+func (s *fakeStream) fail(err error) { s.incoming <- streamReply{err: err} }
+
+// outbound returns the request messages the model has sent.
+func (s *fakeStream) outbound() []proto.Message {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.sent)
+}
+
+// sendingClosed reports whether the model closed the sending half.
+func (s *fakeStream) sendingClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closedSend
+}
+
+// closed reports how many times the model let go of the stream.
+func (s *fakeStream) closed() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closes
+}
+
 // Close makes the fake an io.Closer, which is how the root model releases a
 // connection it opened.
 func (f *fakeClient) Close() error {
@@ -112,7 +260,11 @@ func invocationHeaders(f *fakeClient) *grpcclient.Metadata { return &f.invocatio
 
 // healthyClient is a client that discovers the demo services and answers calls.
 func healthyClient() *fakeClient {
-	return &fakeClient{target: "localhost:50051", services: testServices()}
+	return &fakeClient{
+		target:   "localhost:50051",
+		services: testServices(),
+		streams:  make(chan *fakeStream, 8),
+	}
 }
 
 // goldenProfiles are the connections the headers and switcher goldens are shot
@@ -301,6 +453,8 @@ func keyMsg(k string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyCtrlC}
 	case "ctrl+s":
 		return tea.KeyMsg{Type: tea.KeyCtrlS}
+	case "ctrl+e":
+		return tea.KeyMsg{Type: tea.KeyCtrlE}
 	case "backspace":
 		return tea.KeyMsg{Type: tea.KeyBackspace}
 	default:
@@ -334,7 +488,7 @@ func TestModel_DiscoverySuccess(t *testing.T) {
 	assert.Contains(t, view, "demo.v1.Echo")
 	assert.Contains(t, view, "SayHello")
 	assert.Contains(t, view, "2 services")
-	assert.Contains(t, view, "3 methods")
+	assert.Contains(t, view, "5 methods")
 	assert.Contains(t, view, "Select a method to build a request.")
 }
 
@@ -607,16 +761,39 @@ func TestModel_SendRejectsValuesThatDoNotFitTheirField(t *testing.T) {
 	assert.Contains(t, m.View(), "expected a whole number")
 }
 
-func TestModel_SendRefusesStreamingMethods(t *testing.T) {
+// A streaming method goes down the streaming path rather than the unary one —
+// the whole of v0.5 hangs off which of the two ctrl+s picks. What the stream
+// then does is covered in stream_test.go.
+func TestModel_SendOnAStreamingMethodOpensAStream(t *testing.T) {
 	client := healthyClient()
 	m := settled(t, newModel(t, client))
-	m = selectMethod(t, m, 4) // demo.v1.Greeter.SayHelloStream
+	m = selectMethod(t, m, stepsToSayHelloStream)
+
+	m, cmd := press(t, m, "ctrl+s")
+	require.NotNil(t, cmd, "ctrl+s must start the stream")
+	m = apply(t, m, cmd)
+
+	assert.Contains(t, m.View(), "Watching")
+	assert.Equal(t, "demo.v1.Greeter.SayHelloStream", client.stream(t).Method().FullName)
+}
+
+// The form's own validation still applies to a streaming method: a stream
+// carrying a request that could not be built is a stream opened for nothing.
+func TestModel_SendRefusesAnInvalidStreamingRequest(t *testing.T) {
+	client := healthyClient()
+	m := settled(t, newModel(t, client))
+	m = selectMethod(t, m, stepsToSayHelloStream)
+
+	// times is an int32; "many" is not.
+	m, _ = press(t, m, "j", "enter")
+	m = typeText(t, m, "many")
+	m, _ = press(t, m, "esc")
 
 	m, cmd := press(t, m, "ctrl+s")
 
 	assert.Nil(t, cmd)
 	assert.Zero(t, client.invocations.Load())
-	assert.Contains(t, m.View(), "Streaming methods are callable from v0.5.")
+	assert.NotContains(t, m.View(), "Watching")
 }
 
 func TestModel_SendWithNoMethodSelected(t *testing.T) {

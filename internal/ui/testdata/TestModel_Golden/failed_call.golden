@@ -5,20 +5,20 @@
 ┃   ▾ demo.v1.Greeter                  ┃│                                                          │
 ┃ ❯    SayHello                        ┃│ ❯ name       string                                      │
 ┃      SayHelloStream «stream          ┃│   times      int32                                       │
-┃                                      ┃│   shout      bool            false                       │
-┃                                      ┃│   ▸ volume   demo.v1.Volume                              │
+┃      CollectHellos stream»           ┃│   shout      bool            false                       │
+┃      Converse «stream»               ┃│   ▸ volume   demo.v1.Volume                              │
 ┃                                      ┃│   ▸ aliases  repeated string                             │
 ┃                                      ┃│   ▸ address  demo.v1.Address                             │
 ┃                                      ┃│   ▸ greeting oneof                                       │
 ┃                                      ┃╰──────────────────────────────────────────────────────────╯
 ┃                                      ┃╭──────────────────────────────────────────────────────────╮
 ┃                                      ┃│ Response                                                 │
-┃                                      ┃│ PermissionDenied (7)                                     │
+┃                                      ┃│ PermissionDenied (7)  0s                                 │
 ┃                                      ┃│                                                          │
 ┃                                      ┃│ caller is not allowed to greet                           │
 ┃                                      ┃│                                                          │
 ┃                                      ┃│                                                          │
 ┃                                      ┃│                                                          │
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛╰──────────────────────────────────────────────────────────╯
- localhost:50051  •  2 services  •  3 methods 
+ localhost:50051  •  2 services  •  5 methods 
 ↑/k up • ↓/j down • enter select/edit • ctrl+s send • tab next panel • ? help • q quit

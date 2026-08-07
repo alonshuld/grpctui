@@ -1,10 +1,10 @@
 ╭──────────────────────────────────────╮┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 │ Services                             │┃ Request                                                  ┃
-│   ▾ demo.v1.Echo                     │┃ demo.v1.Greeter.SayHello  unary                          ┃
+│   ▾ demo.v1.Echo                     │┃ demo.v1.Greeter.SayHelloStream  server-streaming         ┃
 │      Echo                            │┃ demo.v1.HelloRequest                                     ┃
 │   ▾ demo.v1.Greeter                  │┃                                                          ┃
-│ ❯    SayHello                        │┃ ❯ name       string          world                       ┃
-│      SayHelloStream «stream          │┃   times      int32                                       ┃
+│      SayHello                        │┃ ❯ name       string          press enter to edit         ┃
+│ ❯    SayHelloStream «stream          │┃   times      int32                                       ┃
 │      CollectHellos stream»           │┃   shout      bool            false                       ┃
 │      Converse «stream»               │┃   ▸ volume   demo.v1.Volume                              ┃
 │                                      │┃   ▸ aliases  repeated string                             ┃
@@ -13,10 +13,20 @@
 │                                      │┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 │                                      │╭──────────────────────────────────────────────────────────╮
 │                                      ││ Response                                                 │
-│                                      ││ demo.v1.HelloReply                                       │
+│                                      ││ OK  →1 ←1  240ms                                         │
 │                                      ││                                                          │
-│                                      ││ Press ctrl+s to send the request.                        │
+│                                      ││ → 1  0s                                                  │
+│                                      ││ {}                                                       │
 │                                      ││                                                          │
+│                                      ││ · sending closed  0s                                     │
+│                                      ││                                                          │
+│                                      ││ ← 1  150ms                                               │
+│                                      ││ {                                                        │
+│                                      ││   "greeting": "hello, world",                            │
+│                                      ││   "count": 1                                             │
+│                                      ││ }                                                        │
+│                                      ││                                                          │
+│                                      ││ · stream finished  240ms                                 │
 │                                      ││                                                          │
 │                                      ││                                                          │
 ╰──────────────────────────────────────╯╰──────────────────────────────────────────────────────────╯

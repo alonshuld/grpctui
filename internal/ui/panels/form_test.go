@@ -312,16 +312,26 @@ func TestForm_ChecksAFieldAsTheEditEnds(t *testing.T) {
 	assert.Equal(t, int32(7), int32Field(t, msg.Request, "number"))
 }
 
-func TestForm_SubmitRefusesStreamingMethods(t *testing.T) {
-	method := formMethod(t)
-	method.ServerStreaming = true
+// A streaming method builds a request like any other: from v0.5 the form has
+// nothing to say about a method's shape, and the root model decides what to do
+// with the message.
+func TestForm_SubmitBuildsStreamingRequests(t *testing.T) {
+	for name, method := range map[string]grpcclient.Method{
+		"server streaming": {Name: "S", ServerStreaming: true},
+		"client streaming": {Name: "C", ClientStreaming: true},
+		"bidi streaming":   {Name: "B", ClientStreaming: true, ServerStreaming: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := formMethod(t)
+			m.ClientStreaming, m.ServerStreaming = method.ClientStreaming, method.ServerStreaming
 
-	form := formFor(t, method)
+			form := formFor(t, m)
+			msg, ok := form.Submit()
 
-	_, ok := form.Submit()
-
-	assert.False(t, ok)
-	assert.Contains(t, form.View(), "v0.5")
+			require.True(t, ok, "the form refused a streaming method:\n%s", form.View())
+			assert.NotNil(t, msg.Request)
+		})
+	}
 }
 
 func TestForm_ClearForgetsTheMethod(t *testing.T) {

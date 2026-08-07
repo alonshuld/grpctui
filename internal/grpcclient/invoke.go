@@ -13,10 +13,10 @@ import (
 	"google.golang.org/protobuf/types/dynamicpb"
 )
 
-// ErrStreamingUnsupported reports a call attempted against a streaming method.
-// Streaming invocation arrives in v0.5; until then the UI refuses the call here
-// rather than half-performing it.
-var ErrStreamingUnsupported = errors.New("streaming methods are not callable yet")
+// ErrNotUnary reports [Client.InvokeUnary] called on a streaming method.
+// Streaming methods go through [Client.InvokeStream], which hands back a
+// [Stream] to drive rather than a single response.
+var ErrNotUnary = errors.New("method is not a unary method")
 
 // UnaryResponse is a completed unary call.
 type UnaryResponse struct {
@@ -98,7 +98,7 @@ func (c *Client) InvokeUnary(ctx context.Context, method Method, req proto.Messa
 		return nil, fmt.Errorf("invoke %q: method has no descriptor", method.FullName)
 	}
 	if method.Kind() != KindUnary {
-		return nil, fmt.Errorf("invoke %s: %w", method.FullName, ErrStreamingUnsupported)
+		return nil, fmt.Errorf("invoke %s: %w", method.FullName, ErrNotUnary)
 	}
 	if req == nil {
 		return nil, fmt.Errorf("invoke %s: no request message", method.FullName)

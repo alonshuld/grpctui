@@ -112,3 +112,47 @@ func TestMarshal(t *testing.T) {
 		assert.Error(t, err)
 	})
 }
+
+// A request is rendered for the stream log, where every unfilled field of the
+// form would otherwise be a line of noise per message sent.
+func TestMarshalRequest(t *testing.T) {
+	t.Run("leaves out what the user did not fill in", func(t *testing.T) {
+		msg := buildAll(t, map[string]string{"text": "hello"})
+
+		body, format, err := protoschema.MarshalRequest(msg)
+
+		require.NoError(t, err)
+		assert.Equal(t, protoschema.FormatJSON, format)
+		assert.Contains(t, body, `"text": "hello"`)
+		assert.NotContains(t, body, `"flag"`, "an untouched field is not part of the request")
+		assert.NotContains(t, body, `"tags"`)
+	})
+
+	// The asymmetry with a response is the whole point, so it is pinned here.
+	t.Run("a response still shows its defaults", func(t *testing.T) {
+		msg := buildAll(t, map[string]string{"text": "hello"})
+
+		body, err := protoschema.MarshalJSON(msg)
+
+		require.NoError(t, err)
+		assert.Contains(t, body, `"flag": false`)
+	})
+
+	t.Run("falls back to text for an unresolvable Any", func(t *testing.T) {
+		msg := &anypb.Any{
+			TypeUrl: "type.googleapis.com/some.server.only.Detail",
+			Value:   []byte{0x0a, 0x03, 'a', 'b', 'c'},
+		}
+
+		body, format, err := protoschema.MarshalRequest(msg)
+
+		require.NoError(t, err, "a message that went out must still produce a log line")
+		assert.Equal(t, protoschema.FormatText, format)
+		assert.Contains(t, body, "some.server.only.Detail")
+	})
+
+	t.Run("a nil message is still an error", func(t *testing.T) {
+		_, _, err := protoschema.MarshalRequest(nil)
+		assert.Error(t, err)
+	})
+}
