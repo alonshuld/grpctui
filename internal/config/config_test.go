@@ -98,17 +98,32 @@ func TestLoad_Rejects(t *testing.T) {
 	}
 }
 
-func TestLoad_UnopenableFile(t *testing.T) {
-	// A path whose parent is a file, rather than a directory or a chmod'd file:
-	// os.Open fails on it on every OS (ENOTDIR, and its Windows equivalent),
-	// whereas chmod 0 does nothing when the tests run as root — as they do in
-	// some CI images — and reading a directory is a platform-dependent mess.
-	notADir := writeConfig(t, "target: localhost:50051\n")
-
-	_, err := config.Load(filepath.Join(notADir, "config.yaml"))
+// A file the user named by hand has to be there. Load's shrug at a missing
+// file is for the default path, which is a suggestion; applying it to an
+// explicit --config turns a typo into a silent no-op.
+func TestLoadFile_MissingIsAnError(t *testing.T) {
+	_, err := config.LoadFile(filepath.Join(t.TempDir(), "absent.yaml"))
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "open config")
+}
+
+func TestLoadFile_ReadsTheSameAsLoad(t *testing.T) {
+	path := writeConfig(t, "target: localhost:50051\n")
+
+	cfg, err := config.LoadFile(path)
+
+	require.NoError(t, err)
+	assert.Equal(t, "localhost:50051", cfg.Target)
+}
+
+func TestLoadFile_EmptyPath(t *testing.T) {
+	// An empty path is "no config file was asked for at all", which the flag
+	// layer allows with --config="".
+	cfg, err := config.LoadFile("")
+
+	require.NoError(t, err)
+	assert.Empty(t, cfg.Target)
 }
 
 func TestDefaultPath(t *testing.T) {

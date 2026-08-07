@@ -2,15 +2,44 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/alonshuld/grpctui/internal/version"
 )
+
+// runWithin runs the CLI and fails if it does not come back.
+//
+// Only the paths that return before the TUI starts can be exercised here, and a
+// case that slips through and reaches tea.Program does not fail — it blocks on
+// a terminal that is not there until the whole test binary times out, ten
+// minutes later, naming nothing. That is precisely what a config path with
+// Unix-only semantics did on Windows. This turns it into an immediate failure
+// against the case responsible.
+func runWithin(t *testing.T, d time.Duration, args []string, stdout, stderr io.Writer) int {
+	t.Helper()
+
+	done := make(chan int, 1)
+	go func() { done <- run(args, stdout, stderr) }()
+
+	select {
+	case code := <-done:
+		return code
+	case <-time.After(d):
+		t.Fatalf("run(%q) did not return within %s: it reached the TUI", args, d)
+		return 0
+	}
+}
+
+// runTimeout is generous — these paths do no I/O worth the name, so anything
+// approaching it means the call is never coming back.
+const runTimeout = 30 * time.Second
 
 // Only the paths that return before the TUI starts are exercised here: once
 // tea.Program takes the terminal there is nothing meaningful to assert from a
@@ -62,8 +91,12 @@ func TestRun(t *testing.T) {
 			wantCode:   exitError,
 			wantStderr: `invalid log level "chatty"`,
 		},
-		"unreadable config": {
-			args:       []string{"--config", "/dev/null/nope/config.yaml", "localhost:50051"},
+		// A named config file that is not there is an error, not a shrug.
+		// Every case in this table must fail before start() is reached: one
+		// that does not launches the real TUI and hangs until the test binary's
+		// timeout, which is exactly how this case used to behave on Windows.
+		"named config is missing": {
+			args:       []string{"--config", filepath.Join(t.TempDir(), "absent.yaml"), "localhost:50051"},
 			wantCode:   exitError,
 			wantStderr: "open config",
 		},
@@ -73,7 +106,7 @@ func TestRun(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 
-			code := run(tt.args, &stdout, &stderr)
+			code := runWithin(t, runTimeout, tt.args, &stdout, &stderr)
 
 			assert.Equal(t, tt.wantCode, code)
 			if tt.wantStdout != "" {
@@ -144,7 +177,7 @@ func TestRun_TargetPrecedence(t *testing.T) {
 		// --log-level is invalid on purpose: it fails after the target has been
 		// resolved but before the TUI takes the terminal, which is as far as a
 		// non-interactive test can go.
-		code := run([]string{"--config", cfg, "--log-level", "chatty"}, &stdout, &stderr)
+		code := runWithin(t, runTimeout, []string{"--config", cfg, "--log-level", "chatty"}, &stdout, &stderr)
 
 		assert.Equal(t, exitError, code)
 		assert.NotContains(t, stderr.String(), "missing target address")
@@ -160,7 +193,7 @@ func TestRun_TargetPrecedence(t *testing.T) {
 	t.Run("no target anywhere is a usage error", func(t *testing.T) {
 		var stdout, stderr bytes.Buffer
 
-		code := run([]string{"--config", writeConfig(t, "# nothing here\n")}, &stdout, &stderr)
+		code := runWithin(t, runTimeout, []string{"--config", writeConfig(t, "# nothing here\n")}, &stdout, &stderr)
 
 		assert.Equal(t, exitUsage, code)
 		assert.Contains(t, stderr.String(), "missing target address")
