@@ -357,16 +357,7 @@ func (f Form) current() (formField, bool) {
 func (f *Form) moveCursor(delta int) { f.moveTo(f.cursor + delta) }
 
 func (f *Form) moveTo(i int) {
-	switch {
-	case len(f.fields) == 0:
-		f.cursor = 0
-	case i < 0:
-		f.cursor = 0
-	case i >= len(f.fields):
-		f.cursor = len(f.fields) - 1
-	default:
-		f.cursor = i
-	}
+	f.cursor = clampIndex(i, len(f.fields))
 	f.clampOffset()
 }
 
@@ -398,25 +389,10 @@ func (f Form) pageSize() int {
 func (f *Form) clampOffset() {
 	f.refresh()
 
-	lines := f.lines
-	if f.height <= 0 || len(lines) <= f.height {
-		f.offset = 0
-		return
-	}
-
-	row := f.cursorLine(lines)
-	if row < f.offset {
-		f.offset = row
-	}
-	if row >= f.offset+f.height {
-		f.offset = row - f.height + 1
-	}
-	if maxOffset := len(lines) - f.height; f.offset > maxOffset {
-		f.offset = maxOffset
-	}
-	if f.offset < 0 {
-		f.offset = 0
-	}
+	// The window counts rendered lines, not fields: a field owns a row plus
+	// however many error and hint rows follow it, so the cursor has to be
+	// translated into a line before it can be scrolled to.
+	f.offset = clampWindow(f.cursorLine(f.lines), f.offset, f.height, len(f.lines))
 }
 
 func (f Form) cursorLine(lines []line) int {
