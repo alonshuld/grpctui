@@ -1,6 +1,8 @@
 package protoschema_test
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -10,7 +12,7 @@ import (
 	"google.golang.org/protobuf/types/descriptorpb"
 )
 
-// The fixture below is this message, built by hand rather than generated:
+// The fixture below is this file, built by hand rather than generated:
 //
 //	syntax = "proto3";
 //	package grpctui.test.v1;
@@ -21,7 +23,11 @@ import (
 //	  COLOUR_BLUE        = 2;
 //	}
 //
-//	message Nested { string note = 1; }
+//	message Nested { string note = 1; int32 depth = 2; }
+//
+//	// A message that contains itself, which a form has to survive: expanding it
+//	// eagerly would not terminate.
+//	message Tree { string label = 1; repeated Tree children = 2; }
 //
 //	message Scalars {
 //	  string   text    = 1;
@@ -39,10 +45,12 @@ import (
 //	  Nested   nested  = 13;
 //	  repeated string tags = 14;
 //	  map<string, string> labels = 15;
-//	  oneof choice { string by_name = 16; int32 by_id = 17; }
-//	  optional string note = 18;
-//	  int32 retry_count = 19;
-//	  optional bool verbose = 20;
+//	  oneof choice { string by_name = 16; int32 by_id = 17; Nested by_nested = 18; }
+//	  optional string note = 19;
+//	  int32 retry_count = 20;
+//	  optional bool verbose = 21;
+//	  repeated Nested notes = 22;
+//	  Tree tree = 23;
 //	}
 //
 // Generating it would mean a protoc dependency in a repo that otherwise needs
@@ -54,14 +62,128 @@ const (
 	testMessage = "grpctui.test.v1.Scalars"
 )
 
+// The files are built once. Descriptors have identity as well as content —
+// dynamicpb rejects a field descriptor from a different build of the same file
+// — so a fixture that rebuilt them per call could not load a message produced
+// by one form into another.
+var (
+	testFile = sync.OnceValue(func() protoreflect.FileDescriptor {
+		return buildFile(testFileProto())
+	})
+	requiredFile = sync.OnceValue(func() protoreflect.FileDescriptor {
+		return buildFile(requiredFileProto())
+	})
+)
+
 func scalarsDescriptor(t *testing.T) protoreflect.MessageDescriptor {
 	t.Helper()
+	return messageDescriptor(t, testFile(), "Scalars")
+}
 
-	fd, err := protodesc.NewFile(testFileProto(), nil)
-	require.NoError(t, err)
+func treeDescriptor(t *testing.T) protoreflect.MessageDescriptor {
+	t.Helper()
+	return messageDescriptor(t, testFile(), "Tree")
+}
 
-	md := fd.Messages().ByName("Scalars")
-	require.NotNil(t, md, "Scalars is missing from the test file")
+// listsDescriptor is one repeated field per element type. An item added and
+// left empty is sent as its type's zero value, and each of those goes through a
+// different protoreflect constructor — a mismatch there is a panic, not a
+// wrong answer, so every kind is worth its line:
+//
+//	message Lists {
+//	  repeated int32  ints    = 1;
+//	  repeated int64  longs   = 2;
+//	  repeated uint32 uints   = 3;
+//	  repeated uint64 ulongs  = 4;
+//	  repeated float  floats  = 5;
+//	  repeated double doubles = 6;
+//	  repeated bool   flags   = 7;
+//	  repeated bytes  blobs   = 8;
+//	  repeated Colour colours = 9;
+//	  repeated string texts   = 10;
+//	}
+func listsDescriptor(t *testing.T) protoreflect.MessageDescriptor {
+	t.Helper()
+	return messageDescriptor(t, testFile(), "Lists")
+}
+
+func listsProto() *descriptorpb.DescriptorProto {
+	return &descriptorpb.DescriptorProto{
+		Name: proto.String("Lists"),
+		Field: []*descriptorpb.FieldDescriptorProto{
+			repeated(scalarField("ints", 1, descriptorpb.FieldDescriptorProto_TYPE_INT32)),
+			repeated(scalarField("longs", 2, descriptorpb.FieldDescriptorProto_TYPE_INT64)),
+			repeated(scalarField("uints", 3, descriptorpb.FieldDescriptorProto_TYPE_UINT32)),
+			repeated(scalarField("ulongs", 4, descriptorpb.FieldDescriptorProto_TYPE_UINT64)),
+			repeated(scalarField("floats", 5, descriptorpb.FieldDescriptorProto_TYPE_FLOAT)),
+			repeated(scalarField("doubles", 6, descriptorpb.FieldDescriptorProto_TYPE_DOUBLE)),
+			repeated(scalarField("flags", 7, descriptorpb.FieldDescriptorProto_TYPE_BOOL)),
+			repeated(scalarField("blobs", 8, descriptorpb.FieldDescriptorProto_TYPE_BYTES)),
+			repeated(namedField("colours", 9, descriptorpb.FieldDescriptorProto_TYPE_ENUM, "."+testPackage+".Colour")),
+			repeated(scalarField("texts", 10, descriptorpb.FieldDescriptorProto_TYPE_STRING)),
+		},
+	}
+}
+
+// requiredDescriptor is a proto2 message with a required field. proto3 has no
+// such thing, so validating one takes a file of its own:
+//
+//	syntax = "proto2";
+//	package grpctui.test.v2;
+//
+//	message Ticket {
+//	  required string id    = 1;
+//	  optional string label = 2;
+//	  optional Stamp  stamp = 3;
+//	}
+//
+//	message Stamp { required int32 at = 1; }
+func requiredDescriptor(t *testing.T) protoreflect.MessageDescriptor {
+	t.Helper()
+	return messageDescriptor(t, requiredFile(), "Ticket")
+}
+
+func requiredFileProto() *descriptorpb.FileDescriptorProto {
+	const pkg = "grpctui.test.v2"
+
+	return &descriptorpb.FileDescriptorProto{
+		Name:    proto.String("grpctui/test/v2/required.proto"),
+		Package: proto.String(pkg),
+		Syntax:  proto.String("proto2"),
+		MessageType: []*descriptorpb.DescriptorProto{
+			{
+				Name: proto.String("Ticket"),
+				Field: []*descriptorpb.FieldDescriptorProto{
+					required(scalarField("id", 1, descriptorpb.FieldDescriptorProto_TYPE_STRING)),
+					scalarField("label", 2, descriptorpb.FieldDescriptorProto_TYPE_STRING),
+					namedField("stamp", 3, descriptorpb.FieldDescriptorProto_TYPE_MESSAGE, "."+pkg+".Stamp"),
+				},
+			},
+			{
+				Name: proto.String("Stamp"),
+				Field: []*descriptorpb.FieldDescriptorProto{
+					required(scalarField("at", 1, descriptorpb.FieldDescriptorProto_TYPE_INT32)),
+				},
+			},
+		},
+	}
+}
+
+// buildFile panics rather than taking a *testing.T: a fixture that will not
+// compile is a mistake in this file, not a test failure.
+func buildFile(file *descriptorpb.FileDescriptorProto) protoreflect.FileDescriptor {
+	fd, err := protodesc.NewFile(file, nil)
+	if err != nil {
+		panic(fmt.Sprintf("build %s: %v", file.GetName(), err))
+	}
+	return fd
+}
+
+func messageDescriptor(t *testing.T, file protoreflect.FileDescriptor, name string) protoreflect.MessageDescriptor {
+	t.Helper()
+
+	md := file.Messages().ByName(protoreflect.Name(name))
+	require.NotNil(t, md, "%s is missing from %s", name, file.Path())
 	return md
 }
 
@@ -80,10 +202,21 @@ func testFileProto() *descriptorpb.FileDescriptorProto {
 		}},
 		MessageType: []*descriptorpb.DescriptorProto{
 			{
-				Name:  proto.String("Nested"),
-				Field: []*descriptorpb.FieldDescriptorProto{scalarField("note", 1, descriptorpb.FieldDescriptorProto_TYPE_STRING)},
+				Name: proto.String("Nested"),
+				Field: []*descriptorpb.FieldDescriptorProto{
+					scalarField("note", 1, descriptorpb.FieldDescriptorProto_TYPE_STRING),
+					scalarField("depth", 2, descriptorpb.FieldDescriptorProto_TYPE_INT32),
+				},
+			},
+			{
+				Name: proto.String("Tree"),
+				Field: []*descriptorpb.FieldDescriptorProto{
+					scalarField("label", 1, descriptorpb.FieldDescriptorProto_TYPE_STRING),
+					repeated(namedField("children", 2, descriptorpb.FieldDescriptorProto_TYPE_MESSAGE, "."+testPackage+".Tree")),
+				},
 			},
 			scalarsProto(),
+			listsProto(),
 		},
 	}
 }
@@ -94,6 +227,7 @@ func scalarsProto() *descriptorpb.DescriptorProto {
 	const (
 		colour = "." + testPackage + ".Colour"
 		nested = "." + testPackage + ".Nested"
+		tree   = "." + testPackage + ".Tree"
 		entry  = "." + testMessage + ".LabelsEntry"
 	)
 
@@ -117,12 +251,15 @@ func scalarsProto() *descriptorpb.DescriptorProto {
 			repeated(namedField("labels", 15, descriptorpb.FieldDescriptorProto_TYPE_MESSAGE, entry)),
 			inOneof(scalarField("by_name", 16, descriptorpb.FieldDescriptorProto_TYPE_STRING), 0),
 			inOneof(scalarField("by_id", 17, descriptorpb.FieldDescriptorProto_TYPE_INT32), 0),
-			proto3Optional(scalarField("note", 18, descriptorpb.FieldDescriptorProto_TYPE_STRING), 1),
+			inOneof(namedField("by_nested", 18, descriptorpb.FieldDescriptorProto_TYPE_MESSAGE, nested), 0),
+			proto3Optional(scalarField("note", 19, descriptorpb.FieldDescriptorProto_TYPE_STRING), 1),
 			// A multi-word name, to pin protobuf's lowerCamelCase JSON mapping.
-			scalarField("retry_count", 19, descriptorpb.FieldDescriptorProto_TYPE_INT32),
+			scalarField("retry_count", 20, descriptorpb.FieldDescriptorProto_TYPE_INT32),
 			// A bool with explicit presence, where false and unset are different
 			// things on the wire — unlike `flag` above.
-			proto3Optional(scalarField("verbose", 20, descriptorpb.FieldDescriptorProto_TYPE_BOOL), 2),
+			proto3Optional(scalarField("verbose", 21, descriptorpb.FieldDescriptorProto_TYPE_BOOL), 2),
+			repeated(namedField("notes", 22, descriptorpb.FieldDescriptorProto_TYPE_MESSAGE, nested)),
+			namedField("tree", 23, descriptorpb.FieldDescriptorProto_TYPE_MESSAGE, tree),
 		},
 		// The synthetic oneofs backing `optional note` and `optional verbose`
 		// must follow every real one, which is why "choice" is declared first.
@@ -160,6 +297,11 @@ func namedField(name string, number int32, kind descriptorpb.FieldDescriptorProt
 
 func repeated(f *descriptorpb.FieldDescriptorProto) *descriptorpb.FieldDescriptorProto {
 	f.Label = descriptorpb.FieldDescriptorProto_LABEL_REPEATED.Enum()
+	return f
+}
+
+func required(f *descriptorpb.FieldDescriptorProto) *descriptorpb.FieldDescriptorProto {
+	f.Label = descriptorpb.FieldDescriptorProto_LABEL_REQUIRED.Enum()
 	return f
 }
 

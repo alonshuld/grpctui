@@ -45,8 +45,11 @@ type Response struct {
 	hasCode bool
 
 	// body is the text under the status line, held unwrapped so that a resize
-	// can lay it out again.
+	// can lay it out again. rendered is the same text with its JSON highlighted,
+	// which depends on the body and not on the panel's size — so it is coloured
+	// once, when the response arrives, rather than on every resize.
 	body     string
+	rendered string
 	format   protoschema.Format
 	duration time.Duration
 
@@ -107,6 +110,7 @@ func (r *Response) SetMethod(m grpcclient.Method) {
 func (r *Response) Clear() {
 	r.state = responseEmpty
 	r.body = ""
+	r.rendered = ""
 	r.format = protoschema.FormatJSON
 	r.status = grpcclient.CallStatus{}
 	r.hasCode = false
@@ -138,6 +142,14 @@ func (r *Response) SetSuccess(body string, format protoschema.Format, took time.
 	r.body = body
 	r.format = format
 	r.duration = took
+
+	// Only JSON is highlighted. protobuf's text format is a different language,
+	// and colouring it by JSON's rules would put emphasis in the wrong places.
+	r.rendered = body
+	if format == protoschema.FormatJSON {
+		r.rendered = r.styles.HighlightJSON(body)
+	}
+
 	r.setBody()
 	r.viewport.GotoTop()
 }
@@ -163,6 +175,7 @@ func (r *Response) SetFailure(message string, status grpcclient.CallStatus, hasS
 	if hasStatus && status.Message != "" {
 		r.body = status.Message
 	}
+	r.rendered = r.body
 	r.setBody()
 	r.viewport.GotoTop()
 }
@@ -178,7 +191,7 @@ func (r *Response) setBody() {
 		r.viewport.SetContent(styles.Wrap(r.body, r.viewport.Width))
 		return
 	}
-	r.viewport.SetContent(r.body)
+	r.viewport.SetContent(r.rendered)
 }
 
 // SetSize sets the panel's inner content area. One line is reserved for the

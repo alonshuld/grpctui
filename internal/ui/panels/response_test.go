@@ -315,3 +315,26 @@ func TestResponse_SaysNothingAboutFormatForJSON(t *testing.T) {
 
 	assert.NotContains(t, r.View(), "protobuf text")
 }
+
+// Highlighting a body colours it and does nothing else. The colours themselves
+// are gone by the time a test can see them — lipgloss strips them on a terminal
+// without any — so what is asserted here is that the text came through: a
+// highlighter that dropped a character would be quietly editing the response.
+func TestResponse_HighlightingLeavesTheBodyIntact(t *testing.T) {
+	bodies := map[protoschema.Format]string{
+		protoschema.FormatJSON: "{\n  \"greeting\": \"hello, world\",\n  \"count\": 3,\n  \"ok\": true\n}",
+		protoschema.FormatText: "greeting: \"hello, world\"\ncount: 3",
+	}
+
+	for format, body := range bodies {
+		t.Run(string(format), func(t *testing.T) {
+			r := newResponse(t)
+			r.SetSuccess(body, format, time.Millisecond)
+
+			view := r.View()
+			for line := range strings.SplitSeq(body, "\n") {
+				assert.Contains(t, view, line)
+			}
+		})
+	}
+}

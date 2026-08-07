@@ -299,11 +299,17 @@ func TestModel_RequestFormRendersEveryFieldKind(t *testing.T) {
 		"shout", "bool",
 		"volume", "demo.v1.Volume",
 		"aliases", "repeated string",
+		"address", "demo.v1.Address",
+		"greeting", "oneof",
 	} {
 		assert.Contains(t, view, want)
 	}
-	assert.Contains(t, view, "repeated fields arrive in v0.3",
-		"a field the form cannot fill in says so rather than vanishing")
+
+	// The shapes that hold other rows are drawn as rows that open, not as
+	// fields to type into.
+	for _, want := range []string{"▸ volume", "▸ aliases", "▸ address", "▸ greeting"} {
+		assert.Contains(t, view, want)
+	}
 }
 
 func TestModel_ReflectionUnavailableGetsItsOwnScreen(t *testing.T) {
@@ -783,7 +789,20 @@ func TestModel_Golden(t *testing.T) {
 		"request form focused": {
 			client: func() ui.Client { return healthyClient() },
 			steps: append(selectSayHello,
-				goldenStep{keys: []string{"tab", "j", "j", "j"}, until: "one of: VOLUME_UNSPECIFIED"}),
+				goldenStep{keys: []string{"tab", "j", "j", "j", "enter"}, until: "○ VOLUME_LOUD"}),
+		},
+		// The v0.3 shapes on one screen: an item added to a repeated field, a
+		// nested message opened and filled in, and a oneof variant picked.
+		"nested request form": {
+			client: func() ui.Client { return healthyClient() },
+			steps: append(selectSayHello,
+				goldenStep{keys: []string{"tab", "j", "j", "j", "j", "a"}, until: "[0]"},
+				goldenStep{keys: []string{"enter", "a", "d", "a", "esc"}, until: "ada"},
+				goldenStep{keys: []string{"j", "enter"}, until: "postcode"},
+				goldenStep{keys: []string{"j", "enter", "O", "s", "l", "o", "esc"}, until: "Oslo"},
+				goldenStep{keys: []string{"j", "j", "enter"}, until: "○ automatic"},
+				goldenStep{keys: []string{"j", " "}, until: "● custom"},
+			),
 		},
 		"editing a field": {
 			client: func() ui.Client { return healthyClient() },

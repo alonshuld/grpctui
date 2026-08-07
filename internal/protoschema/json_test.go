@@ -12,14 +12,12 @@ import (
 )
 
 func TestMarshalJSON(t *testing.T) {
-	form := testForm(t)
-	msg, err := form.Build(map[string]string{
+	msg := buildAll(t, map[string]string{
 		"text":   "hello",
 		"count":  "7",
 		"total":  "9007199254740993",
 		"colour": "COLOUR_BLUE",
 	})
-	require.NoError(t, err)
 
 	out, err := protoschema.MarshalJSON(msg)
 	require.NoError(t, err)
@@ -49,9 +47,7 @@ func TestMarshalJSON(t *testing.T) {
 // make the response panel's output unstable and its golden files unusable. The
 // re-indent step is what stops that leaking out of this package.
 func TestMarshalJSON_IsStable(t *testing.T) {
-	form := testForm(t)
-	msg, err := form.Build(map[string]string{"text": "hello", "count": "7"})
-	require.NoError(t, err)
+	msg := buildAll(t, map[string]string{"text": "hello", "count": "7"})
 
 	first, err := protoschema.MarshalJSON(msg)
 	require.NoError(t, err)
@@ -86,9 +82,7 @@ func TestMarshalJSON_UnresolvableAny(t *testing.T) {
 
 func TestMarshal(t *testing.T) {
 	t.Run("prefers JSON", func(t *testing.T) {
-		form := testForm(t)
-		msg, err := form.Build(map[string]string{"text": "hello"})
-		require.NoError(t, err)
+		msg := build(t, "text", "hello")
 
 		body, format, err := protoschema.Marshal(msg)
 

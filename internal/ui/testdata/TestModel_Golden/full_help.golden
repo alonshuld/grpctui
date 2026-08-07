@@ -16,9 +16,9 @@
 ┃                                      ┃│                                                          │
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛╰──────────────────────────────────────────────────────────╯
  localhost:50051  •  2 services  •  3 methods 
-↑/k    up           enter select/edit     ctrl+s send      tab       next panel    r retry
-↓/j    down         →/l   expand          esc    cancel    shift+tab prev panel    ? help 
-ctrl+u page up      ←/h   collapse                                                 q quit 
-ctrl+d page down    space toggle                                                          
-g      top          H     scroll left                                                     
-G      bottom       L     scroll right                                                    
+↑/k    up           enter select/edit     a      add item       tab       next panel    r retry
+↓/j    down         →/l   expand          d      remove item    shift+tab prev panel    ? help 
+ctrl+u page up      ←/h   collapse        ctrl+s send                                   q quit 
+ctrl+d page down    space toggle          esc    cancel                                        
+g      top          H     scroll left                                                          
+G      bottom       L     scroll right                                                         

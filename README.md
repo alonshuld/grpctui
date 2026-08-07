@@ -7,10 +7,11 @@ browser tab.
 Point it at a gRPC server with reflection enabled and it discovers the entire
 API surface with zero configuration.
 
-> **Status: v0.2 — First Request/Response Cycle.** Discover a server, fill in
-> a request form generated from the method's input message, send a unary call,
-> and read the decoded response. Nested and repeated fields land in v0.3;
-> metadata and TLS in v0.4; streaming in v0.5.
+> **Status: v0.3 — Real Request Forms.** Discover a server, fill in a request
+> form generated from the method's input message — nested messages, repeated
+> fields, maps, `oneof` variants and enums included — send a unary call, and
+> read the highlighted response. Metadata and TLS land in v0.4; streaming in
+> v0.5.
 
 ## Install
 
@@ -29,8 +30,8 @@ grpctui localhost:50051
 
 Pick a method with `j`/`k` and `enter`, `tab` into the request form, `enter` to
 edit a field and `esc` when you are done with it, then `ctrl+s` to send. The
-response arrives as JSON in the panel below the form; a non-OK call shows its
-gRPC status code and the server's message in the same place. A response JSON
+response arrives as highlighted JSON in the panel below the form; a non-OK call
+shows its gRPC status code and the server's message in the same place. A response JSON
 cannot represent — one carrying a `google.protobuf.Any` whose payload type the
 server never described — is shown in protobuf's text format instead, labelled
 as such, rather than reported as a failed call.
@@ -80,14 +81,26 @@ filename or inside the file.
 
 ## Request fields
 
-The request form is generated from the method's input message. v0.2 fills in
-scalars — `string`, the integer and floating-point families, `bool`, `bytes`
-(base64) and enums, which take either a value name (`STATUS_SERVING`) or its
-number.
+The request form is generated from the method's input message, and it is a tree
+rather than a list: a row either holds a value you type in or holds other rows
+you open with `enter` (or `→`/`l`) and fold away again with `←`/`h`.
 
-Fields with a shape the form cannot edit yet — nested messages, repeated
-fields, maps and `oneof` members — are still listed, marked with the version
-that brings them (v0.3).
+| Shape | How you fill it in |
+| --- | --- |
+| `string`, integers, floats, `bytes` (base64) | `enter` to edit, `esc` when done |
+| `bool` | `space` toggles it |
+| enum | open it and pick a value with `enter` or `space` |
+| nested message | open it and fill in its fields |
+| repeated field, map | `a` adds an item, `d` removes the one under the cursor |
+| `oneof` | open it and pick a variant with `space`; typing into one picks it too |
+
+`a` works from anywhere inside a list, not just on the list's own row, so a
+dozen items are a dozen keystrokes rather than a walk back up each time.
+
+Values are checked as each edit ends, so a typo is reported on the row where it
+was made rather than when the call goes out. Sending checks the whole form and
+reports every bad row at once — including proto2 `required` fields nobody
+filled in.
 
 A field you never touch is left unset rather than sent as an explicit default.
 Clearing one you have typed into is different: for a field with explicit
@@ -99,6 +112,11 @@ toggling it sends nothing at all.
 Those fields say which state they are in: `unset` for one that will not be
 sent, `""` for one that will be sent empty.
 
+The same problem turns up a level higher: an empty nested message is
+indistinguishable from one nobody opened, so `space` on a message row sends it
+anyway. An item you add to a repeated field is always sent, empty or not — you
+added it on purpose.
+
 ## Keybindings
 
 | Key | Action |
@@ -106,10 +124,11 @@ sent, `""` for one that will be sent empty.
 | `↑`/`k`, `↓`/`j` | Move the cursor |
 | `ctrl+u`, `ctrl+d` | Page up / down |
 | `g`, `G` | Jump to top / bottom |
-| `→`/`l`, `←`/`h` | Expand / collapse a service |
+| `→`/`l`, `←`/`h` | Expand / collapse a service or a request field |
 | `L`/`⇧→`, `H`/`⇧←` | Scroll the response left / right |
-| `enter` | Toggle a service, select a method, or edit a field |
-| `space` | Toggle a `bool` field |
+| `enter` | Toggle a service, select a method, edit a field, or open a field that holds others |
+| `space` | Toggle a `bool`, pick an enum value or a `oneof` variant, send an empty message |
+| `a`, `d` | Add / remove an item of a repeated or map field |
 | `ctrl+s` | Send the request |
 | `esc` | Stop editing a field, or cancel a call in flight |
 | `tab`, `shift+tab` | Switch panel |

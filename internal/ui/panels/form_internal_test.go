@@ -52,8 +52,20 @@ func TestForm_RenderCacheNeverGoesStale(t *testing.T) {
 		// name and type columns use up the row, and a toggle would change
 		// nothing visible — which would make the check below vacuous.
 		{"resized wider", func(f *Form) { f.SetSize(90, 10) }},
+		{"a row expanded", func(f *Form) {
+			f.moveTo(9) // options, a nested message
+			f.expand()
+		}},
+		{"a row collapsed", func(f *Form) { f.collapse() }},
+		{"an item added", func(f *Form) {
+			f.moveTo(9)
+			f.expand()
+			*f = pressInternal(*f, "j", "j", "j", "j") // options ▸ uninterpreted_option
+			f.addItem()
+		}},
+		{"an item removed", func(f *Form) { f.removeItem() }},
 		{"bool toggled", func(f *Form) {
-			f.moveTo(len(f.fields) - 1)
+			f.moveTo(len(f.rows) - 1)
 			f.toggle()
 		}},
 		{"bool toggled back", func(f *Form) { f.toggle() }},

@@ -22,12 +22,15 @@ import (
 //
 //	message EchoRequest  { string message = 1; }
 //	message EchoReply    { string message = 1; }
+//	message Address      { string city = 1; string postcode = 2; }
 //	message HelloRequest {
 //	  string   name    = 1;
 //	  int32    times   = 2;
 //	  bool     shout   = 3;
 //	  Volume   volume  = 4;
 //	  repeated string aliases = 5;
+//	  Address  address = 6;
+//	  oneof greeting { string custom = 7; bool automatic = 8; }
 //	}
 //	message HelloReply   { string greeting = 1; int32 count = 2; }
 //
@@ -109,6 +112,13 @@ func demoFileProto() *descriptorpb.FileDescriptorProto {
 				Field: []*descriptorpb.FieldDescriptorProto{stringField("message", 1)},
 			},
 			{
+				Name: proto.String("Address"),
+				Field: []*descriptorpb.FieldDescriptorProto{
+					stringField("city", 1),
+					stringField("postcode", 2),
+				},
+			},
+			{
 				Name: proto.String("HelloRequest"),
 				Field: []*descriptorpb.FieldDescriptorProto{
 					stringField("name", 1),
@@ -116,7 +126,11 @@ func demoFileProto() *descriptorpb.FileDescriptorProto {
 					typedField("shout", 3, descriptorpb.FieldDescriptorProto_TYPE_BOOL),
 					enumField("volume", 4, "."+pkg+".Volume"),
 					repeatedField(stringField("aliases", 5)),
+					messageField("address", 6, "."+pkg+".Address"),
+					oneofField(stringField("custom", 7), 0),
+					oneofField(typedField("automatic", 8, descriptorpb.FieldDescriptorProto_TYPE_BOOL), 0),
 				},
+				OneofDecl: []*descriptorpb.OneofDescriptorProto{{Name: proto.String("greeting")}},
 			},
 			{
 				Name: proto.String("HelloReply"),
@@ -163,8 +177,19 @@ func enumField(name string, number int32, typeName string) *descriptorpb.FieldDe
 	return f
 }
 
+func messageField(name string, number int32, typeName string) *descriptorpb.FieldDescriptorProto {
+	f := typedField(name, number, descriptorpb.FieldDescriptorProto_TYPE_MESSAGE)
+	f.TypeName = proto.String(typeName)
+	return f
+}
+
 func repeatedField(f *descriptorpb.FieldDescriptorProto) *descriptorpb.FieldDescriptorProto {
 	f.Label = descriptorpb.FieldDescriptorProto_LABEL_REPEATED.Enum()
+	return f
+}
+
+func oneofField(f *descriptorpb.FieldDescriptorProto, index int32) *descriptorpb.FieldDescriptorProto {
+	f.OneofIndex = proto.Int32(index)
 	return f
 }
 

@@ -62,6 +62,15 @@ type Styles struct {
 	StatusOK    lipgloss.Style
 	StatusError lipgloss.Style
 
+	// The response body's syntax highlighting. Keys carry the structure of a
+	// message, so they get the accent colour; the values beside them are told
+	// apart by type rather than fought for attention.
+	JSONKey     lipgloss.Style
+	JSONString  lipgloss.Style
+	JSONNumber  lipgloss.Style
+	JSONLiteral lipgloss.Style
+	JSONPunct   lipgloss.Style
+
 	ErrorTitle lipgloss.Style
 	ErrorBody  lipgloss.Style
 	Hint       lipgloss.Style
@@ -108,6 +117,12 @@ func New() Styles {
 
 		StatusOK:    lipgloss.NewStyle().Bold(true).Foreground(p.Success),
 		StatusError: lipgloss.NewStyle().Bold(true).Foreground(p.Error),
+
+		JSONKey:     lipgloss.NewStyle().Foreground(p.Primary),
+		JSONString:  lipgloss.NewStyle().Foreground(p.Secondary),
+		JSONNumber:  lipgloss.NewStyle().Foreground(p.Text),
+		JSONLiteral: lipgloss.NewStyle().Bold(true).Foreground(p.Text),
+		JSONPunct:   lipgloss.NewStyle().Foreground(p.Muted),
 
 		ErrorTitle: lipgloss.NewStyle().Bold(true).Foreground(p.Error),
 		ErrorBody:  lipgloss.NewStyle().Foreground(p.Text),

@@ -12,6 +12,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/descriptorpb"
+	_ "google.golang.org/protobuf/types/known/structpb" // registers google.protobuf.Value
 
 	"github.com/alonshuld/grpctui/internal/grpcclient"
 	"github.com/alonshuld/grpctui/internal/ui/keys"
@@ -19,31 +20,35 @@ import (
 	"github.com/alonshuld/grpctui/internal/ui/styles"
 )
 
-// formMethod is a method whose request message is FieldDescriptorProto: a real,
-// already-registered message that happens to be exactly what this panel needs —
-// a dozen fields covering strings, an int32, two enums, a bool and a nested
-// message. Only the service around it has to be invented, and it resolves
-// against the global registry, so there is no fixture to keep in step with
-// anything.
+// The panel's fixtures are real, already-registered messages, invented services
+// aside: descriptor.proto and struct.proto between them cover every shape a
+// request form has to render, and resolving against the global registry means
+// there is no descriptor literal here to keep in step with anything.
 const (
 	formMethodName  = "grpctui.paneltest.v1.Describer.Describe"
 	formRequestName = "google.protobuf.FieldDescriptorProto"
+
+	descriptorProto = "google/protobuf/descriptor.proto"
+	structProto     = "google/protobuf/struct.proto"
+
+	formService = "grpctui.paneltest.v1.Describer"
 )
 
-func formMethod(t *testing.T) grpcclient.Method {
+// methodFor invents a unary method taking the named request message.
+func methodFor(t *testing.T, dependency, request string) grpcclient.Method {
 	t.Helper()
 
 	file, err := protodesc.NewFile(&descriptorpb.FileDescriptorProto{
 		Name:       proto.String("grpctui/paneltest/v1/describer.proto"),
 		Package:    proto.String("grpctui.paneltest.v1"),
 		Syntax:     proto.String("proto3"),
-		Dependency: []string{"google/protobuf/descriptor.proto"},
+		Dependency: []string{dependency},
 		Service: []*descriptorpb.ServiceDescriptorProto{{
 			Name: proto.String("Describer"),
 			Method: []*descriptorpb.MethodDescriptorProto{{
 				Name:       proto.String("Describe"),
-				InputType:  proto.String("." + formRequestName),
-				OutputType: proto.String(".google.protobuf.DescriptorProto"),
+				InputType:  proto.String("." + request),
+				OutputType: proto.String("." + request),
 			}},
 		}},
 	}, protoregistry.GlobalFiles)
@@ -59,13 +64,20 @@ func formMethod(t *testing.T) grpcclient.Method {
 	}
 }
 
+func formMethod(t *testing.T) grpcclient.Method {
+	t.Helper()
+	return methodFor(t, descriptorProto, formRequestName)
+}
+
 // Row order in FieldDescriptorProto's form, which the tests below navigate by.
 // It is declaration order — name, number, label, type, type_name, extendee,
 // default_value, oneof_index, json_name, options, proto3_optional — not field
 // number order.
 const (
-	fieldNumber  = 1 // int32
-	fieldOptions = 9 // message: not editable until v0.3
+	fieldNumber   = 1  // int32
+	fieldTypeName = 4  // string
+	fieldOptions  = 9  // message
+	fieldProto3   = 10 // bool, with presence
 )
 
 // down moves the cursor n rows.
@@ -78,17 +90,58 @@ func down(t *testing.T, form panels.Form, n int) panels.Form {
 	return form
 }
 
+// downTo walks the cursor onto the named row, so that a test navigating a real
+// descriptor does not also pin where in descriptor.proto a field is declared.
+func downTo(t *testing.T, form panels.Form, name string) panels.Form {
+	t.Helper()
+
+	for range 100 {
+		if cursorLabel(form.View()) == name {
+			return form
+		}
+		next, _ := pressForm(t, form, "j")
+		if next.View() == form.View() {
+			break
+		}
+		form = next
+	}
+
+	t.Fatalf("no row %q in:\n%s", name, form.View())
+	return form
+}
+
+// cursorLabel is the name of the row under the cursor, with the glyphs saying
+// what kind of row it is stripped off.
+func cursorLabel(view string) string {
+	for line := range strings.SplitSeq(view, "\n") {
+		if !strings.HasPrefix(line, "❯ ") {
+			continue
+		}
+		for word := range strings.FieldsSeq(strings.TrimPrefix(line, "❯ ")) {
+			if !strings.ContainsAny(word, "▾▸●○") {
+				return word
+			}
+		}
+	}
+	return ""
+}
+
 // formHeight is tall enough to show every row of the test message at once, so
 // that an assertion about the view is never really an assertion about scrolling.
 const formHeight = 20
 
 func newForm(t *testing.T) panels.Form {
 	t.Helper()
+	return formFor(t, formMethod(t))
+}
+
+func formFor(t *testing.T, method grpcclient.Method) panels.Form {
+	t.Helper()
 
 	form := panels.NewForm(keys.Default(), styles.New())
-	form.SetSize(60, formHeight)
+	form.SetSize(72, formHeight)
 	form.Focus()
-	form.SetMethod(grpcclient.Service{Name: "grpctui.paneltest.v1.Describer"}, formMethod(t))
+	form.SetMethod(grpcclient.Service{Name: formService}, method)
 	return form
 }
 
@@ -100,6 +153,15 @@ func pressForm(t *testing.T, form panels.Form, keystrokes ...string) (panels.For
 		form, cmd = form.Update(keyMsg(k))
 	}
 	return form, cmd
+}
+
+// submit sends the form, failing the test if it will not go.
+func submit(t *testing.T, form panels.Form) panels.SendRequestMsg {
+	t.Helper()
+
+	msg, ok := form.Submit()
+	require.True(t, ok, "the form refused to build a request:\n%s", form.View())
+	return msg
 }
 
 func TestForm_EmptyUntilAMethodIsSelected(t *testing.T) {
@@ -204,19 +266,6 @@ func TestForm_ScrollsToKeepTheCursorVisible(t *testing.T) {
 	assert.Contains(t, view, "❯", "the cursor scrolled out of view")
 }
 
-func TestForm_UnsupportedFieldsCannotBeEdited(t *testing.T) {
-	form := newForm(t)
-
-	// options is a nested message: listed, explained, and not editable. The
-	// explanation is truncated to the column, so only its start is asserted.
-	require.Contains(t, form.View(), "nested messages ar")
-
-	form = down(t, form, fieldOptions)
-	form, _ = pressForm(t, form, "enter")
-
-	assert.False(t, form.Editing(), "a field with no editor must not enter edit mode")
-}
-
 func TestForm_SubmitBuildsARequest(t *testing.T) {
 	form := newForm(t)
 
@@ -224,16 +273,11 @@ func TestForm_SubmitBuildsARequest(t *testing.T) {
 	form, _ = pressForm(t, form, "f", "o", "o")
 	form, _ = pressForm(t, form, "esc")
 
-	msg, ok := form.Submit()
+	msg := submit(t, form)
 
-	require.True(t, ok)
 	assert.Equal(t, formMethodName, msg.Method.FullName)
 	require.NotNil(t, msg.Request)
-
-	m := msg.Request.ProtoReflect()
-	nameField := m.Descriptor().Fields().ByName("name")
-	require.NotNil(t, nameField)
-	assert.Equal(t, "foo", m.Get(nameField).String())
+	assert.Equal(t, "foo", stringField(t, msg.Request, "name"))
 }
 
 func TestForm_SubmitReportsBadValuesAgainstTheirField(t *testing.T) {
@@ -252,13 +296,27 @@ func TestForm_SubmitReportsBadValuesAgainstTheirField(t *testing.T) {
 	assert.Contains(t, view, "⚠")
 }
 
-func TestForm_SubmitRefusesStreamingMethods(t *testing.T) {
-	form := panels.NewForm(keys.Default(), styles.New())
-	form.SetSize(60, formHeight)
+// A typo is reported where it was made. Waiting for the send would mean typing
+// out the rest of the form before finding out the first field was wrong.
+func TestForm_ChecksAFieldAsTheEditEnds(t *testing.T) {
+	form := newForm(t)
+	form = down(t, form, fieldNumber)
 
+	form, _ = pressForm(t, form, "enter", "l", "o", "t", "s", "esc")
+	assert.Contains(t, form.View(), "expected a whole number")
+
+	form, _ = pressForm(t, form, "enter", "backspace", "backspace", "backspace", "backspace", "7", "esc")
+	assert.NotContains(t, form.View(), "expected a whole number", "fixing the value must clear the complaint")
+
+	msg := submit(t, form)
+	assert.Equal(t, int32(7), int32Field(t, msg.Request, "number"))
+}
+
+func TestForm_SubmitRefusesStreamingMethods(t *testing.T) {
 	method := formMethod(t)
 	method.ServerStreaming = true
-	form.SetMethod(grpcclient.Service{Name: "grpctui.paneltest.v1.Describer"}, method)
+
+	form := formFor(t, method)
 
 	_, ok := form.Submit()
 
@@ -284,14 +342,11 @@ func TestForm_SetMethodResetsTheValues(t *testing.T) {
 	form, _ = pressForm(t, form, "enter", "x", "esc")
 	require.Contains(t, form.View(), "x")
 
-	form.SetMethod(grpcclient.Service{Name: "grpctui.paneltest.v1.Describer"}, formMethod(t))
+	form.SetMethod(grpcclient.Service{Name: formService}, formMethod(t))
 	assert.False(t, form.Editing())
 
-	msg, ok := form.Submit()
-	require.True(t, ok)
-
-	m := msg.Request.ProtoReflect()
-	assert.False(t, m.Has(m.Descriptor().Fields().ByName("name")), "the old value came along")
+	msg := submit(t, form)
+	assert.False(t, fieldIsSet(t, msg.Request, "name"), "the old value came along")
 }
 
 func TestForm_ContentHeightGrowsWithTheMessage(t *testing.T) {
@@ -299,6 +354,19 @@ func TestForm_ContentHeightGrowsWithTheMessage(t *testing.T) {
 	empty.SetSize(60, 12)
 
 	assert.Less(t, empty.ContentHeight(), newForm(t).ContentHeight())
+}
+
+// Expanding a nested message adds rows to the panel, which has to ask the root
+// model for more of the column — or the fields it just revealed are drawn over
+// the response.
+func TestForm_ContentHeightGrowsWhenARowIsExpanded(t *testing.T) {
+	form := newForm(t)
+	before := form.ContentHeight()
+
+	form = down(t, form, fieldOptions)
+	form, _ = pressForm(t, form, "enter")
+
+	assert.Greater(t, form.ContentHeight(), before)
 }
 
 func TestForm_SurvivesDegenerateSizes(t *testing.T) {
@@ -310,18 +378,9 @@ func TestForm_SurvivesDegenerateSizes(t *testing.T) {
 	}
 }
 
-// Row order again, for the tests below: the bool is proto3_optional, the last
-// field of FieldDescriptorProto — and, being a proto2 field, one with explicit
-// presence, so false and unset are genuinely different answers.
-const (
-	fieldTypeName       = 4  // string
-	fieldProto3Optional = 10 // bool, with presence
-)
-
 // A page jump moves by the field rows on screen, not by the panel's height. The
 // two are not the same number: the header takes three lines before the first
-// field, and every hint takes another, so paging by the height steps over
-// fields the user never saw.
+// field, so paging by the height steps over fields the user never saw.
 func TestForm_PagesByVisibleFieldRows(t *testing.T) {
 	form := newForm(t)
 	form.SetSize(60, 8) // header (3 lines) + 5 field rows
@@ -351,20 +410,17 @@ func TestForm_PagingStopsAtTheEnds(t *testing.T) {
 
 // Space cycles a bool between an explicit true and an explicit false. The
 // second is not the same as never having touched the field: for a bool with
-// presence — which every proto2 field has — false is a value the caller can
-// only send by saying so.
+// presence — which every field of descriptor.proto has — false is a value the
+// caller can only send by saying so.
 func TestForm_BoolTogglesBetweenTrueAndFalse(t *testing.T) {
 	form := newForm(t)
-	form = down(t, form, fieldProto3Optional)
+	form = down(t, form, fieldProto3)
 
 	form, _ = pressForm(t, form, " ")
-	msg, ok := form.Submit()
-	require.True(t, ok)
-	assert.True(t, boolField(t, msg.Request, "proto3_optional"))
+	assert.True(t, boolField(t, submit(t, form).Request, "proto3_optional"))
 
 	form, _ = pressForm(t, form, " ")
-	msg, ok = form.Submit()
-	require.True(t, ok)
+	msg := submit(t, form)
 	assert.False(t, boolField(t, msg.Request, "proto3_optional"))
 	assert.True(t, fieldIsSet(t, msg.Request, "proto3_optional"),
 		"a toggled-off bool must be sent as an explicit false, not dropped")
@@ -373,10 +429,7 @@ func TestForm_BoolTogglesBetweenTrueAndFalse(t *testing.T) {
 func TestForm_AnUntouchedBoolIsNotSent(t *testing.T) {
 	form := newForm(t)
 
-	msg, ok := form.Submit()
-
-	require.True(t, ok)
-	assert.False(t, fieldIsSet(t, msg.Request, "proto3_optional"),
+	assert.False(t, fieldIsSet(t, submit(t, form).Request, "proto3_optional"),
 		"a bool nobody toggled must not be sent at all")
 }
 
@@ -388,8 +441,7 @@ func TestForm_ClearingAFieldSendsAnExplicitEmptyValue(t *testing.T) {
 
 	form, _ = pressForm(t, form, "enter", "x", "backspace", "esc")
 
-	msg, ok := form.Submit()
-	require.True(t, ok)
+	msg := submit(t, form)
 	assert.True(t, fieldIsSet(t, msg.Request, "type_name"),
 		`a field the user cleared must be sent as ""`)
 	assert.Empty(t, stringField(t, msg.Request, "type_name"))
@@ -398,10 +450,7 @@ func TestForm_ClearingAFieldSendsAnExplicitEmptyValue(t *testing.T) {
 func TestForm_AnUntouchedFieldIsNotSent(t *testing.T) {
 	form := newForm(t)
 
-	msg, ok := form.Submit()
-
-	require.True(t, ok)
-	assert.False(t, fieldIsSet(t, msg.Request, "type_name"),
+	assert.False(t, fieldIsSet(t, submit(t, form).Request, "type_name"),
 		"a field nobody visited must not be sent")
 }
 
@@ -412,9 +461,169 @@ func TestForm_EnteringAFieldWithoutTypingLeavesItUnset(t *testing.T) {
 
 	form, _ = pressForm(t, form, "enter", "esc")
 
-	msg, ok := form.Submit()
-	require.True(t, ok)
-	assert.False(t, fieldIsSet(t, msg.Request, "type_name"))
+	assert.False(t, fieldIsSet(t, submit(t, form).Request, "type_name"))
+}
+
+// An enum is picked from the list it expands to, not typed in: nothing else on
+// screen says what a legal value looks like.
+func TestForm_EnumIsPickedFromItsValues(t *testing.T) {
+	form := newForm(t)
+	form = downTo(t, form, "label")
+
+	form, _ = pressForm(t, form, "enter")
+	require.False(t, form.Editing(), "an enum is not typed into")
+	require.Contains(t, form.View(), "○ LABEL_OPTIONAL", "expanding an enum shows what it accepts")
+
+	// Down onto the first value, and pick it.
+	form, _ = pressForm(t, form, "j", "enter")
+
+	view := form.View()
+	assert.NotContains(t, view, "○ LABEL_", "picking a value folds the list away again")
+	assert.Contains(t, view, "❯ ▸ label", "the cursor comes back to the field that was picked for")
+	assert.Contains(t, view, "LABEL_OPTIONAL", "the row shows what was picked")
+
+	msg := submit(t, form)
+	assert.Equal(t, protoreflect.EnumNumber(1), enumField(t, msg.Request, "label"))
+}
+
+// A nested message is a row that opens, not a row that is typed into.
+func TestForm_NestedMessageExpands(t *testing.T) {
+	form := newForm(t)
+	form = down(t, form, fieldOptions)
+
+	form, _ = pressForm(t, form, "enter")
+
+	require.False(t, form.Editing())
+	view := form.View()
+	assert.Contains(t, view, "▾ options")
+	assert.Contains(t, view, "deprecated", "the message's own fields are the rows underneath it")
+
+	// And h folds it back up.
+	form, _ = pressForm(t, form, "h")
+	assert.NotContains(t, form.View(), "deprecated")
+}
+
+func TestForm_CollapseJumpsToTheParentRow(t *testing.T) {
+	form := newForm(t)
+	form = down(t, form, fieldOptions)
+	form, _ = pressForm(t, form, "l", "j") // open options, step onto its first field
+
+	form, _ = pressForm(t, form, "h")
+
+	assert.Contains(t, form.View(), "❯ ▾ options",
+		"collapsing from a field inside a message goes to the message")
+}
+
+// A message with nothing in it is not sent by default — there is nothing to
+// distinguish it from one nobody opened — so saying "send it anyway" is a
+// keystroke of its own.
+func TestForm_EmptyNestedMessageIsSentOnlyWhenAskedFor(t *testing.T) {
+	form := newForm(t)
+	form = down(t, form, fieldOptions)
+
+	assert.False(t, fieldIsSet(t, submit(t, form).Request, "options"))
+
+	form, _ = pressForm(t, form, " ")
+	assert.True(t, fieldIsSet(t, submit(t, form).Request, "options"))
+}
+
+func TestForm_NestedValuesAreSent(t *testing.T) {
+	form := newForm(t)
+	form = downTo(t, form, "options")
+
+	// A value inside the message brings the message with it: nothing had to say
+	// "send options" for its own sake.
+	form, _ = pressForm(t, form, "l")
+	form = downTo(t, form, "deprecated")
+	form, _ = pressForm(t, form, " ")
+
+	msg := submit(t, form)
+	require.True(t, fieldIsSet(t, msg.Request, "options"))
+
+	m, fd := requestField(t, msg.Request, "options")
+	options := m.Get(fd).Message()
+	assert.True(t, options.Get(options.Descriptor().Fields().ByName("deprecated")).Bool())
+}
+
+// FileDescriptorProto is the fixture with repeated fields in it: `dependency`
+// is a repeated string, which is the shape a user fills in by hand most often.
+func listForm(t *testing.T) panels.Form {
+	t.Helper()
+	return formFor(t, methodFor(t, descriptorProto, "google.protobuf.FileDescriptorProto"))
+}
+
+func TestForm_RepeatedFieldAddsAndRemovesItems(t *testing.T) {
+	form := listForm(t)
+	form = downTo(t, form, "dependency")
+	require.Contains(t, form.View(), "press a to add an item")
+
+	form, _ = pressForm(t, form, "a")
+	form, _ = pressForm(t, form, "enter", "o", "n", "e", "esc")
+
+	// `a` from inside the list adds a sibling, so a list is filled in without
+	// ever going back to the row above it.
+	form, _ = pressForm(t, form, "a")
+	form, _ = pressForm(t, form, "enter", "t", "w", "o", "esc")
+	form, _ = pressForm(t, form, "a")
+	form, _ = pressForm(t, form, "enter", "s", "i", "x", "esc")
+
+	view := form.View()
+	assert.Contains(t, view, "[0]")
+	assert.Contains(t, view, "[2]")
+	assert.Contains(t, view, "3 items")
+
+	assert.Equal(t, []string{"one", "two", "six"}, stringList(t, submit(t, form).Request, "dependency"))
+
+	// And d takes the item under the cursor back out again, renumbering the rest.
+	form, _ = pressForm(t, form, "k", "d")
+
+	assert.Equal(t, []string{"one", "six"}, stringList(t, submit(t, form).Request, "dependency"))
+	assert.Contains(t, form.View(), "2 items")
+	assert.Equal(t, "[1]", cursorLabel(form.View()),
+		"the cursor stays on the row the removed item left, where the next one now is")
+	assert.Contains(t, form.View(), "six")
+}
+
+func TestForm_RepeatedMessagesAreFilledInLikeAnyOther(t *testing.T) {
+	form := listForm(t)
+	form = downTo(t, form, "message_type")
+
+	form, _ = pressForm(t, form, "a")
+	require.Contains(t, form.View(), "▾ [0]", "a new message item opens, or its fields are out of reach")
+
+	form = downTo(t, form, "name")
+	form, _ = pressForm(t, form, "enter", "M", "s", "g", "esc")
+
+	msg := submit(t, form)
+	m, fd := requestField(t, msg.Request, "message_type")
+	list := m.Get(fd).List()
+	require.Equal(t, 1, list.Len())
+
+	item := list.Get(0).Message()
+	assert.Equal(t, "Msg", item.Get(item.Descriptor().Fields().ByName("name")).String())
+}
+
+// google.protobuf.Value is one oneof and nothing else, which is exactly the
+// shape this needs.
+func TestForm_OneofPicksOneVariant(t *testing.T) {
+	form := formFor(t, methodFor(t, structProto, "google.protobuf.Value"))
+
+	require.Contains(t, form.View(), "▸ kind")
+	form, _ = pressForm(t, form, "enter")
+
+	view := form.View()
+	assert.Contains(t, view, "○ number_value", "every variant is offered")
+	assert.Contains(t, view, "○ string_value")
+
+	// Typing into a variant picks it: that is what typing there meant.
+	form, _ = pressForm(t, form, "j", "j", "j") // null_value, number_value, string_value
+	form, _ = pressForm(t, form, "enter", "h", "i", "esc")
+
+	assert.Contains(t, form.View(), "● string_value")
+
+	msg := submit(t, form)
+	assert.Equal(t, "hi", stringField(t, msg.Request, "string_value"))
+	assert.False(t, fieldIsSet(t, msg.Request, "number_value"))
 }
 
 func requestField(t *testing.T, msg proto.Message, name string) (protoreflect.Message, protoreflect.FieldDescriptor) {
@@ -444,6 +653,31 @@ func stringField(t *testing.T, msg proto.Message, name string) string {
 	return m.Get(fd).String()
 }
 
+func int32Field(t *testing.T, msg proto.Message, name string) int32 {
+	t.Helper()
+	m, fd := requestField(t, msg, name)
+	return int32(m.Get(fd).Int())
+}
+
+func enumField(t *testing.T, msg proto.Message, name string) protoreflect.EnumNumber {
+	t.Helper()
+	m, fd := requestField(t, msg, name)
+	return m.Get(fd).Enum()
+}
+
+func stringList(t *testing.T, msg proto.Message, name string) []string {
+	t.Helper()
+
+	m, fd := requestField(t, msg, name)
+	list := m.Get(fd).List()
+
+	out := make([]string, 0, list.Len())
+	for i := range list.Len() {
+		out = append(out, list.Get(i).String())
+	}
+	return out
+}
+
 // A field with presence has a state an ordinary field does not — filled in with
 // nothing — and one it does not share with its own zero value. The row has to
 // distinguish them, or the user cannot tell what will be sent.
@@ -455,11 +689,10 @@ func TestForm_MarksPresenceFieldsThatAreUnsetOrEmpty(t *testing.T) {
 	})
 
 	t.Run("a toggled bool shows its value", func(t *testing.T) {
-		toggled := down(t, form, fieldProto3Optional)
+		toggled := down(t, form, fieldProto3)
 		toggled, _ = pressForm(t, toggled, " ", " ")
 
-		view := toggled.View()
-		assert.Contains(t, view, "false")
+		assert.Contains(t, toggled.View(), "false")
 	})
 
 	t.Run("a cleared field is not the same as an untouched one", func(t *testing.T) {
