@@ -1,0 +1,34 @@
+╭──────────────────────────────────────╮┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+│ Services                             │┃ Request                                                  ┃
+│   ▾ demo.v1.Echo                     │┃ demo.v1.Greeter.Converse  bidi-streaming                 ┃
+│      Echo                            │┃ demo.v1.HelloRequest                                     ┃
+│   ▾ demo.v1.Greeter                  │┃                                                          ┃
+│      SayHello                        │┃ ❯ name       string          press enter to edit         ┃
+│      SayHelloStream «stream          │┃   times      int32                                       ┃
+│      CollectHellos stream»           │┃   shout      bool            false                       ┃
+│ ❯    Converse «stream»               │┃   ▸ volume   demo.v1.Volume                              ┃
+│                                      │┃   ▸ aliases  repeated string                             ┃
+│                                      │┃   ▸ address  demo.v1.Address                             ┃
+│                                      │┃   ▸ greeting oneof                                       ┃
+│                                      │┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+│                                      │╭──────────────────────────────────────────────────────────╮
+│                                      ││ Response                                                 │
+│                                      ││ ⣾  Streaming  →2 ←2  415ms                               │
+│                                      ││                                                          │
+│                                      ││ ← 1  45ms                                                │
+│                                      ││ {                                                        │
+│                                      ││   "greeting": "and hello to you",                        │
+│                                      ││   "count": 1                                             │
+│                                      ││ }                                                        │
+│                                      ││                                                          │
+│                                      ││ → 2  355ms                                               │
+│                                      ││ {}                                                       │
+│                                      ││                                                          │
+│                                      ││ ← 2  415ms                                               │
+│                                      ││ {                                                        │
+│                                      ││   "greeting": "still here",                              │
+│                                      ││   "count": 2                                             │
+│                                      ││ }                                                        │
+╰──────────────────────────────────────╯╰──────────────────────────────────────────────────────────╯
+ localhost:50051  •  →2 ←2 415ms  •  2 services  •  5 methods 
+↑/k up • ↓/j down • enter select/edit • ctrl+s send • tab next panel • ? help • q quit

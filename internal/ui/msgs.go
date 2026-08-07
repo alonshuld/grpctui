@@ -38,6 +38,55 @@ type clientConnectedMsg struct {
 	err    error
 }
 
+// streamOpenedMsg carries the outcome of opening a streaming call. Opening one
+// puts a request on the wire, so like every other RPC it happens in a tea.Cmd
+// and comes back as a message.
+type streamOpenedMsg struct {
+	// seq identifies the stream, from the same counter unary calls use: a stream
+	// and a call are both "the call in flight", and only one of them exists at a
+	// time.
+	seq int
+
+	stream grpcclient.Stream
+	err    error
+}
+
+// streamSentMsg reports one request message having gone out — or the sending
+// half having been closed, when closedSend is set.
+type streamSentMsg struct {
+	seq int
+
+	// body is the message as it was rendered for the log, and format how. They
+	// are empty for a close, which puts a note in the log rather than a message.
+	body   string
+	format protoschema.Format
+
+	closedSend bool
+	err        error
+
+	// at is how far into the stream this happened.
+	at time.Duration
+}
+
+// streamRecvMsg carries one response message off a stream, or the end of it.
+type streamRecvMsg struct {
+	seq int
+
+	body   string
+	format protoschema.Format
+
+	// done marks the clean end of the stream: the server finished sending and
+	// the call succeeded.
+	done bool
+
+	// err is how the stream failed, with its gRPC status when it had one.
+	err       error
+	status    grpcclient.CallStatus
+	hasStatus bool
+
+	at time.Duration
+}
+
 // callFinishedMsg carries the outcome of one unary call. The response is
 // already rendered as JSON: decoding happens in the command, not in Update.
 type callFinishedMsg struct {

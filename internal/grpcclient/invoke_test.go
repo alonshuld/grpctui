@@ -186,7 +186,7 @@ func TestClient_InvokeUnary_RejectsStreamingMethods(t *testing.T) {
 
 	_, err := c.InvokeUnary(context.Background(), method, checkRequest(t, method, ""), nil)
 
-	require.ErrorIs(t, err, grpcclient.ErrStreamingUnsupported)
+	require.ErrorIs(t, err, grpcclient.ErrNotUnary)
 }
 
 func TestClient_InvokeUnary_RejectsBadArguments(t *testing.T) {

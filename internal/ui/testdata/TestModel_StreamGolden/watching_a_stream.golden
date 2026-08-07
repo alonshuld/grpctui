@@ -1,10 +1,10 @@
 ╭──────────────────────────────────────╮┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 │ Services                             │┃ Request                                                  ┃
-│   ▾ demo.v1.Echo                     │┃ demo.v1.Greeter.SayHello  unary                          ┃
+│   ▾ demo.v1.Echo                     │┃ demo.v1.Greeter.SayHelloStream  server-streaming         ┃
 │      Echo                            │┃ demo.v1.HelloRequest                                     ┃
 │   ▾ demo.v1.Greeter                  │┃                                                          ┃
-│ ❯    SayHello                        │┃ ❯ name       string          world                       ┃
-│      SayHelloStream «stream          │┃   times      int32                                       ┃
+│      SayHello                        │┃ ❯ name       string          press enter to edit         ┃
+│ ❯    SayHelloStream «stream          │┃   times      int32                                       ┃
 │      CollectHellos stream»           │┃   shout      bool            false                       ┃
 │      Converse «stream»               │┃   ▸ volume   demo.v1.Volume                              ┃
 │                                      │┃   ▸ aliases  repeated string                             ┃
@@ -13,12 +13,22 @@
 │                                      │┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 │                                      │╭──────────────────────────────────────────────────────────╮
 │                                      ││ Response                                                 │
-│                                      ││ demo.v1.HelloReply                                       │
-│                                      ││                                                          │
-│                                      ││ Press ctrl+s to send the request.                        │
+│                                      ││ ⣾  Watching  →1 ←2  1s                                   │
 │                                      ││                                                          │
 │                                      ││                                                          │
+│                                      ││ · sending closed  0s                                     │
 │                                      ││                                                          │
+│                                      ││ ← 1  120ms                                               │
+│                                      ││ {                                                        │
+│                                      ││   "greeting": "hello, world",                            │
+│                                      ││   "count": 1                                             │
+│                                      ││ }                                                        │
+│                                      ││                                                          │
+│                                      ││ ← 2  1s                                                  │
+│                                      ││ {                                                        │
+│                                      ││   "greeting": "hello again",                             │
+│                                      ││   "count": 2                                             │
+│                                      ││ }                                                        │
 ╰──────────────────────────────────────╯╰──────────────────────────────────────────────────────────╯
- localhost:50051  •  2 services  •  5 methods 
+ localhost:50051  •  →1 ←2 1s  •  2 services  •  5 methods 
 ↑/k up • ↓/j down • enter select/edit • ctrl+s send • tab next panel • ? help • q quit

@@ -38,6 +38,10 @@ const DefaultDiscoveryTimeout = 10 * time.Second
 // DefaultCallTimeout bounds a single unary call. It is generous on purpose:
 // the user can give up sooner with esc, and a tool for debugging misbehaving
 // services should not be the thing that decides a slow server has failed.
+//
+// It deliberately does not apply to a stream. Watching a server-streaming
+// method for an hour is the feature, and a timeout would make the tool decide
+// when a watch has gone on long enough; esc ends one, and nothing else does.
 const DefaultCallTimeout = 60 * time.Second
 
 // Discoverer is the discovery half of the transport layer.
@@ -51,12 +55,20 @@ type Invoker interface {
 	InvokeUnary(ctx context.Context, method grpcclient.Method, req proto.Message, md grpcclient.Metadata) (*grpcclient.UnaryResponse, error)
 }
 
+// Streamer opens streaming calls. It is separate from [Invoker] because the two
+// hand back different things: a unary call returns its answer, a stream returns
+// something to drive.
+type Streamer interface {
+	InvokeStream(ctx context.Context, method grpcclient.Method, md grpcclient.Metadata) (grpcclient.Stream, error)
+}
+
 // Client is the slice of the transport layer the UI depends on. Keeping it an
 // interface here — rather than taking *grpcclient.Client — is what lets the UI
 // tests run with no server at all.
 type Client interface {
 	Discoverer
 	Invoker
+	Streamer
 }
 
 // Dialer opens a connection for a profile. The root model uses it to switch
@@ -134,6 +146,17 @@ func WithCallTimeout(d time.Duration) Option {
 	}
 }
 
+// WithClock replaces the clock the UI reads for a stream's elapsed time. A test
+// that freezes it gets a stream panel whose every line is decided by the
+// messages it was fed.
+func WithClock(now func() time.Time) Option {
+	return func(m *Model) {
+		if now != nil {
+			m.now = now
+		}
+	}
+}
+
 // WithDialer supplies the way to open a connection for a profile. Without one
 // the profile switcher can list connections but not move between them, which is
 // what a UI test with a hand-made client gets.
@@ -203,8 +226,30 @@ type Model struct {
 	// leave two dials in flight, and only the later one's client may be kept.
 	connSeq int
 
-	// cancelCall aborts the call in flight, if any.
+	// cancelCall aborts the call in flight, if any — a unary one or a stream.
 	cancelCall context.CancelFunc
+
+	// stream is the streaming call in flight, if any, and streamStart when it
+	// was opened.
+	stream      grpcclient.Stream
+	streamStart time.Time
+
+	// sendQueue holds the request messages waiting to go out on the stream, and
+	// sending records that one of them is on its way. gRPC allows one sender at
+	// a time, so pressing send twice in quick succession has to queue rather
+	// than race — and a client-streaming call is a queue of messages by nature.
+	sendQueue []proto.Message
+	sending   bool
+
+	// closeAfterQueue records that the user has asked to close the sending half,
+	// which happens once whatever is already queued has gone out. Closing
+	// straight away would throw away messages the user has already sent.
+	closeAfterQueue bool
+
+	// now is the clock the UI reads for a stream's elapsed time. Tests replace
+	// it, so that a frame is a function of the messages that produced it and a
+	// golden file of one is reproducible.
+	now func() time.Time
 
 	// pendingTarget is the address being dialled, so the connecting screen names
 	// where it is going rather than where it has been.
@@ -251,6 +296,7 @@ func New(client Client, opts ...Option) Model {
 		response:         panels.NewResponse(km, st),
 		profiles:         panels.NewProfiles(km, st),
 		state:            stateConnecting,
+		now:              time.Now,
 		discoveryTimeout: DefaultDiscoveryTimeout,
 		callTimeout:      DefaultCallTimeout,
 	}
@@ -367,6 +413,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case callFinishedMsg:
 		return m.finishCall(msg)
 
+	case streamOpenedMsg:
+		return m.streamOpened(msg)
+
+	case streamSentMsg:
+		return m.streamSent(msg)
+
+	case streamRecvMsg:
+		return m.streamReceived(msg)
+
 	case panels.ProfileSelectedMsg:
 		return m, m.startConnect(msg)
 
@@ -407,6 +462,9 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 		}
 		return m.send(), true
 
+	case key.Matches(msg, m.keys.EndStream):
+		return m.endSending(), true
+
 	case key.Matches(msg, m.keys.NextPanel):
 		return nil, m.movePanel(1)
 
@@ -439,7 +497,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 		m.err = nil
 		return tea.Batch(m.spinner.Tick, m.discover()), true
 
-	case key.Matches(msg, m.keys.Cancel) && m.response.InFlight():
+	case key.Matches(msg, m.keys.Cancel) && m.response.Active():
 		m.abortCall()
 		return nil, true
 	}
@@ -477,13 +535,283 @@ func (m *Model) send() tea.Cmd {
 		m.layout()
 		return nil
 	}
-	return m.startCall(req)
+	if req.Method.Kind() == grpcclient.KindUnary {
+		return m.startCall(req)
+	}
+	return m.sendOnStream(req)
 }
+
+// sendOnStream puts one request message on the stream, opening it first if it
+// is not already running.
+//
+// That is the same keystroke meaning two things by context, and deliberately:
+// ctrl+s is "send what the form says", and on a client-streaming call that is a
+// thing you do repeatedly before ending the request stream with ctrl+e.
+func (m *Model) sendOnStream(req panels.SendRequestMsg) tea.Cmd {
+	// A method the client does not stream into carries exactly one request, so
+	// there is no second message to send on its stream: ctrl+s starts a new one,
+	// the same way a second ctrl+s replaces a unary call in flight.
+	//
+	// A client-streaming stream whose sending half the user has already closed
+	// is deliberately not restarted. They ended the request stream and are
+	// waiting for the answer to it; throwing that away and starting again is the
+	// one thing they cannot have meant.
+	if m.stream == nil || !req.Method.ClientStreaming {
+		return m.startStream(req)
+	}
+
+	m.sendQueue = append(m.sendQueue, req.Request)
+	return m.nextSend()
+}
+
+// startStream opens a streaming call, tagged with a sequence number from the
+// same counter unary calls use — only one call, of either shape, is ever in
+// flight.
+func (m *Model) startStream(req panels.SendRequestMsg) tea.Cmd {
+	m.abortCall()
+	m.dropStream()
+	m.callSeq++
+
+	// No timeout: see [DefaultCallTimeout]. The stream ends when the server
+	// finishes, when the user presses esc, or when the process does.
+	ctx, cancel := context.WithCancel(m.ctx)
+	m.cancelCall = cancel
+	m.streamStart = m.now()
+
+	// The first request message goes out as soon as the stream is open. A
+	// method the client does not stream into has exactly one, so its sending
+	// half is closed behind it — leaving it open would keep a finished request
+	// waiting on a user who has nothing left to say.
+	m.sendQueue = []proto.Message{req.Request}
+	m.closeAfterQueue = !req.Method.ClientStreaming
+
+	// Header names, never their values.
+	md := m.metadata.Headers()
+	m.logger.Info("opening stream",
+		zap.String("target", m.client.Target()),
+		zap.String("method", req.Method.FullName),
+		zap.String("kind", string(req.Method.Kind())),
+		zap.Strings("headers", md.Keys()),
+	)
+
+	tick := m.response.SetStreaming(req.Method)
+	m.layout()
+	return tea.Batch(tick, openStream(ctx, m.client, req.Method, md, m.callSeq))
+}
+
+// openStream opens the call off the Update goroutine.
+func openStream(ctx context.Context, client Streamer, method grpcclient.Method, md grpcclient.Metadata, seq int) tea.Cmd {
+	return func() tea.Msg {
+		stream, err := client.InvokeStream(ctx, method, md)
+		return streamOpenedMsg{seq: seq, stream: stream, err: err}
+	}
+}
+
+// streamOpened starts the two halves of the stream running: the queue that
+// feeds it, and the chain of receives that drains it.
+func (m Model) streamOpened(msg streamOpenedMsg) (tea.Model, tea.Cmd) {
+	if msg.seq != m.callSeq {
+		// A stream the user has already moved on from. It is closed here rather
+		// than left to the garbage collector: an abandoned gRPC stream holds its
+		// call open until something cancels it.
+		if msg.stream != nil {
+			_ = msg.stream.Close()
+		}
+		m.logger.Debug("dropping a stale stream", zap.Int("seq", msg.seq))
+		return m, nil
+	}
+
+	if msg.err != nil {
+		m.cancelCall = nil
+		m.sendQueue, m.closeAfterQueue = nil, false
+		st, hasStatus := grpcclient.StatusOf(msg.err)
+		m.response.FinishStream(msg.err.Error(), st, hasStatus, m.elapsed())
+		m.layout()
+		m.logger.Error("could not open the stream", zap.Error(msg.err))
+		return m, nil
+	}
+
+	m.stream = msg.stream
+	return m, tea.Batch(m.nextSend(), receive(m.stream, m.callSeq, m.elapsed))
+}
+
+// nextSend issues the next thing the send queue is waiting to do: one message,
+// or — once the queue has drained — the close the user asked for.
+//
+// Only one send runs at a time. gRPC allows a single sender per stream, and the
+// order messages arrive in is part of what a client-streaming call means, so
+// two of them may not race even when the transport would tolerate it.
+func (m *Model) nextSend() tea.Cmd {
+	if m.sending || m.stream == nil {
+		return nil
+	}
+
+	if len(m.sendQueue) > 0 {
+		req := m.sendQueue[0]
+		m.sendQueue = m.sendQueue[1:]
+		m.sending = true
+		return send(m.stream, req, m.callSeq, m.elapsed)
+	}
+
+	if m.closeAfterQueue {
+		m.closeAfterQueue = false
+		m.sending = true
+		return closeSending(m.stream, m.callSeq, m.elapsed)
+	}
+	return nil
+}
+
+// endSending closes the stream's sending half once whatever is queued has gone
+// out. With no stream open the key does nothing, and says so in the log rather
+// than on screen: it is not an error, just a key pressed at the wrong moment.
+func (m *Model) endSending() tea.Cmd {
+	if m.stream == nil {
+		m.logger.Debug("no stream to end")
+		return nil
+	}
+	m.closeAfterQueue = true
+	return m.nextSend()
+}
+
+// send puts one request message on the stream, rendering it for the log on the
+// same goroutine so that the panel receives text and never a protobuf message.
+func send(stream grpcclient.Stream, req proto.Message, seq int, at func() time.Duration) tea.Cmd {
+	return func() tea.Msg {
+		body, format, err := protoschema.MarshalRequest(req)
+		if err != nil {
+			// The message is going out regardless — it is valid protobuf, or the
+			// form would not have built it. Only the rendering failed, and saying
+			// so in the log beats dropping the line.
+			body, format = "(the request could not be rendered: "+err.Error()+")", protoschema.FormatText
+		}
+
+		if err := stream.Send(req); err != nil {
+			return streamSentMsg{seq: seq, err: err, at: at()}
+		}
+		return streamSentMsg{seq: seq, body: body, format: format, at: at()}
+	}
+}
+
+// closeSending closes the sending half off the Update goroutine.
+func closeSending(stream grpcclient.Stream, seq int, at func() time.Duration) tea.Cmd {
+	return func() tea.Msg {
+		err := stream.CloseSend()
+		return streamSentMsg{seq: seq, closedSend: true, err: err, at: at()}
+	}
+}
+
+// receive reads one message off the stream. Each result issues the next
+// receive, which is how a chain of tea.Cmds drains a stream without ever
+// blocking Update.
+func receive(stream grpcclient.Stream, seq int, at func() time.Duration) tea.Cmd {
+	return func() tea.Msg {
+		msg, err := stream.Recv()
+		switch {
+		case errors.Is(err, io.EOF):
+			return streamRecvMsg{seq: seq, done: true, at: at()}
+		case err != nil:
+			st, hasStatus := grpcclient.StatusOf(err)
+			return streamRecvMsg{seq: seq, err: err, status: st, hasStatus: hasStatus, at: at()}
+		}
+
+		body, format, err := protoschema.Marshal(msg)
+		if err != nil {
+			return streamRecvMsg{seq: seq, err: err, at: at()}
+		}
+		return streamRecvMsg{seq: seq, body: body, format: format, at: at()}
+	}
+}
+
+// streamSent records a request message having gone out, and starts whatever the
+// queue holds next.
+func (m Model) streamSent(msg streamSentMsg) (tea.Model, tea.Cmd) {
+	if msg.seq != m.callSeq {
+		m.logger.Debug("dropping a stale stream send", zap.Int("seq", msg.seq))
+		return m, nil
+	}
+	m.sending = false
+
+	switch {
+	case errors.Is(msg.err, io.EOF):
+		// The stream is already over and the reason belongs to the receiving
+		// half, which is about to report it. Anything said here would be a
+		// second, less informative version of the same event.
+		m.sendQueue, m.closeAfterQueue = nil, false
+		return m, nil
+
+	case msg.err != nil:
+		m.sendQueue, m.closeAfterQueue = nil, false
+		m.response.AppendNote(msg.err.Error(), msg.at)
+		m.logger.Warn("could not send on the stream", zap.Error(msg.err))
+
+	case msg.closedSend:
+		m.response.AppendNote("sending closed", msg.at)
+
+	default:
+		m.response.AppendSent(msg.body, msg.format, msg.at)
+	}
+
+	m.layout()
+	return m, m.nextSend()
+}
+
+// streamReceived appends one response message to the log and asks for the next,
+// or closes the log when the stream has ended.
+func (m Model) streamReceived(msg streamRecvMsg) (tea.Model, tea.Cmd) {
+	if msg.seq != m.callSeq {
+		m.logger.Debug("dropping a stale stream message", zap.Int("seq", msg.seq))
+		return m, nil
+	}
+
+	if msg.done || msg.err != nil {
+		return m.finishStream(msg)
+	}
+
+	m.response.AppendReceived(msg.body, msg.format, msg.at)
+	m.layout()
+	return m, receive(m.stream, m.callSeq, m.elapsed)
+}
+
+// finishStream closes the stream out, leaving everything it carried on screen.
+func (m Model) finishStream(msg streamRecvMsg) (tea.Model, tea.Cmd) {
+	message := ""
+	if msg.err != nil {
+		message = msg.err.Error()
+	}
+	m.response.FinishStream(message, msg.status, msg.hasStatus, msg.at)
+
+	m.cancelCall = nil
+	m.dropStream()
+	m.layout()
+
+	m.logger.Debug("stream ended",
+		zap.Bool("ok", msg.done),
+		zap.Duration("took", msg.at),
+	)
+	return m, nil
+}
+
+// dropStream lets go of the stream, along with anything queued to go out on it.
+func (m *Model) dropStream() {
+	if m.stream != nil {
+		_ = m.stream.Close()
+		m.stream = nil
+	}
+	m.sendQueue = nil
+	m.sending = false
+	m.closeAfterQueue = false
+}
+
+// elapsed reports how long the current stream has been running. It is passed
+// into the stream's commands as a function, so that each one timestamps itself
+// when it actually happens rather than when it was created.
+func (m Model) elapsed() time.Duration { return m.now().Sub(m.streamStart) }
 
 // startCall issues one unary call, tagged with a sequence number so that a
 // result the user has moved on from can be discarded.
 func (m *Model) startCall(req panels.SendRequestMsg) tea.Cmd {
 	m.abortCall()
+	m.dropStream()
 	m.callSeq++
 
 	ctx, cancel := context.WithTimeout(m.ctx, m.callTimeout)
@@ -609,12 +937,16 @@ func (m Model) finishConnect(msg clientConnectedMsg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(m.spinner.Tick, m.discover())
 }
 
-// Close releases the connection the model holds, if the model opened it. The
-// client [New] was given belongs to whoever passed it in.
+// Close releases the connection the model holds, if the model opened it, along
+// with any stream still running on it. The client [New] was given belongs to
+// whoever passed it in.
 //
 // bubbletea has no teardown hook, so this is called on the final model that
 // Run returns.
 func (m Model) Close() error {
+	if m.stream != nil {
+		_ = m.stream.Close()
+	}
 	if !m.ownsClient {
 		return nil
 	}
@@ -649,7 +981,7 @@ func (m *Model) abortCall() {
 
 // retireCall abandons the call in flight, if any: it is cancelled and its
 // sequence number bumped, so the answer already on its way is dropped rather
-// than shown.
+// than shown. A stream is dropped with it, queued messages and all.
 //
 // That is the difference from [Model.abortCall], which the user presses esc for
 // and which is meant to put "Canceled" on screen. Here there is nothing left to
@@ -660,6 +992,7 @@ func (m *Model) retireCall() {
 	}
 	retired := m.callSeq
 	m.abortCall()
+	m.dropStream()
 	m.callSeq++
 	m.logger.Debug("abandoned an in-flight call", zap.Int("seq", retired))
 }
@@ -669,6 +1002,13 @@ func (m *Model) retireCall() {
 // unconditionally.
 func (m Model) tick(msg spinner.TickMsg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
+
+	// A stream's elapsed time advances on the tick rather than on its messages:
+	// a watch that has gone quiet is still running, and a clock frozen beside a
+	// turning spinner would read as a hung UI.
+	if m.response.Streaming() {
+		m.response.SetElapsed(m.elapsed())
+	}
 
 	if m.state == stateConnecting {
 		var cmd tea.Cmd
@@ -874,6 +1214,13 @@ func (m Model) statusBar() string {
 
 	if n := m.metadata.Enabled(); n > 0 {
 		segments = append(segments, fmt.Sprintf("%d %s", n, plural(n, "header")))
+	}
+
+	// How much an open stream has carried, and for how long. It belongs here as
+	// well as on the panel's own status line: the response panel scrolls, and
+	// this is the number you watch while it does.
+	if summary, ok := m.response.StreamSummary(); ok {
+		segments = append(segments, summary)
 	}
 
 	segments = append(segments,

@@ -41,6 +41,11 @@ type serverConfig struct {
 	serving []string
 	creds   credentials.TransportCredentials
 
+	// unknown, when set, answers every method of a service the server does not
+	// have registered — which is how the streaming tests serve a service that
+	// has no generated code behind it at all.
+	unknown grpc.StreamHandler
+
 	// headers, when set, records the metadata of every incoming RPC — which is
 	// the only way to assert from the outside that a header the client was told
 	// to send actually reached the server.
@@ -134,6 +139,9 @@ func startTestServer(t *testing.T, opts ...serverOption) *testServer {
 	}
 	if cfg.creds != nil {
 		srvOpts = append(srvOpts, grpc.Creds(cfg.creds))
+	}
+	if cfg.unknown != nil {
+		srvOpts = append(srvOpts, grpc.UnknownServiceHandler(cfg.unknown))
 	}
 
 	srv := grpc.NewServer(srvOpts...)

@@ -74,18 +74,40 @@ func Marshal(msg proto.Message) (string, Format, error) {
 // what the server actually returned, and a field that came back at its default
 // is information, not noise.
 func MarshalJSON(msg proto.Message) (string, error) {
+	return marshalJSON(msg, true)
+}
+
+// MarshalRequest renders a message the user is sending, which is the same
+// rendering minus the unpopulated fields.
+//
+// The asymmetry is deliberate. A response's defaults are information — the
+// server chose to leave them empty. A request's are not: they are every field
+// of the form the user did not fill in, and a stream log that spends seven
+// lines on them per sent message is a log nobody can read.
+func MarshalRequest(msg proto.Message) (string, Format, error) {
+	body, err := marshalJSON(msg, false)
+	if err == nil {
+		return body, FormatJSON, nil
+	}
+	// The same fallback [Marshal] makes, and for the same reason: a request
+	// carrying an Any this client has never seen is still a request that went
+	// out, and a log line beats a rendering error.
+	return Marshal(msg)
+}
+
+func marshalJSON(msg proto.Message, unpopulated bool) (string, error) {
 	if msg == nil {
-		return "", errors.New("marshal response: no message")
+		return "", errors.New("marshal message: no message")
 	}
 
-	compact, err := protojson.MarshalOptions{EmitUnpopulated: true}.Marshal(msg)
+	compact, err := protojson.MarshalOptions{EmitUnpopulated: unpopulated}.Marshal(msg)
 	if err != nil {
-		return "", fmt.Errorf("marshal response as JSON: %w", err)
+		return "", fmt.Errorf("marshal message as JSON: %w", err)
 	}
 
 	var out bytes.Buffer
 	if err := json.Indent(&out, compact, "", jsonIndent); err != nil {
-		return "", fmt.Errorf("indent response JSON: %w", err)
+		return "", fmt.Errorf("indent message JSON: %w", err)
 	}
 	return out.String(), nil
 }

@@ -290,12 +290,8 @@ func (f *Form) Submit() (SendRequestMsg, bool) {
 	f.fieldErrs = nil
 	f.notice = ""
 
-	switch {
-	case !f.selected:
+	if !f.selected {
 		f.notice = "Select a method first."
-		return SendRequestMsg{}, false
-	case f.method.Kind() != grpcclient.KindUnary:
-		f.notice = "Streaming methods are callable from v0.5."
 		return SendRequestMsg{}, false
 	}
 

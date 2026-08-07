@@ -62,6 +62,12 @@ type Styles struct {
 	StatusOK    lipgloss.Style
 	StatusError lipgloss.Style
 
+	// The two directions a stream message travels. They differ in colour, and
+	// the log puts an arrow beside them so the distinction survives a
+	// monochrome terminal.
+	StreamSent     lipgloss.Style
+	StreamReceived lipgloss.Style
+
 	// The response body's syntax highlighting. Keys carry the structure of a
 	// message, so they get the accent colour; the values beside them are told
 	// apart by type rather than fought for attention.
@@ -117,6 +123,9 @@ func New() Styles {
 
 		StatusOK:    lipgloss.NewStyle().Bold(true).Foreground(p.Success),
 		StatusError: lipgloss.NewStyle().Bold(true).Foreground(p.Error),
+
+		StreamSent:     lipgloss.NewStyle().Bold(true).Foreground(p.Primary),
+		StreamReceived: lipgloss.NewStyle().Bold(true).Foreground(p.Secondary),
 
 		JSONKey:     lipgloss.NewStyle().Foreground(p.Primary),
 		JSONString:  lipgloss.NewStyle().Foreground(p.Secondary),

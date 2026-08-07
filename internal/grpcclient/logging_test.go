@@ -3,6 +3,7 @@ package grpcclient_test
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -84,6 +85,47 @@ func TestClient_NeverLogsPayloads(t *testing.T) {
 	assert.Contains(t, fields, "response_bytes")
 	assert.NotContains(t, fields, "request", "sizes, not contents")
 	assert.NotContains(t, fields, "response")
+}
+
+// A stream carries as many payloads as the user cares to send, and logs a line
+// per message, so the same rule has to hold on every one of them.
+func TestClient_NeverLogsStreamPayloads(t *testing.T) {
+	ts := startTestServer(t, withStreamer())
+	c, logs := observed(t, ts)
+
+	method := streamerMethod(t, "Ticks")
+	md := grpcclient.Metadata{{Key: "x-api-key", Value: secretCredential}}
+
+	s, err := c.InvokeStream(context.Background(), method, md)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+
+	require.NoError(t, s.Send(item(t, method, secretPayload)))
+	require.NoError(t, s.CloseSend())
+
+	// The server echoes the request text back, so draining the stream puts the
+	// secret through the receiving half's logging as well as the sending half's.
+	_, err = drain(t, s)
+	require.ErrorIs(t, err, io.EOF)
+
+	records := logs.All()
+	require.NotEmpty(t, records, "the client logged nothing at all, so this proves nothing")
+	for _, entry := range records {
+		assert.NotContains(t, text(t, entry), secretPayload, "a stream payload reached the log")
+		assert.NotContains(t, text(t, entry), secretCredential, "a header value reached the log")
+	}
+
+	opened := logs.FilterMessage("opened stream").All()
+	require.Len(t, opened, 1)
+	assert.Equal(t, []any{"x-api-key"}, opened[0].ContextMap()["headers"],
+		"header names are what a log can usefully carry")
+
+	finished := logs.FilterMessage("stream finished").All()
+	require.Len(t, finished, 1, "a stream that ended should say so exactly once")
+
+	fields := finished[0].ContextMap()
+	assert.EqualValues(t, 1, fields["sent"])
+	assert.EqualValues(t, ticks, fields["received"])
 }
 
 // The same standing decision applied to credentials: a bearer token and a

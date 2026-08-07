@@ -5,8 +5,8 @@
 ┃   ▾ demo.v1.Greeter                  ┃╭──────────────────────────────────────────────────────────╮
 ┃      SayHello                        ┃│ Response                                                 │
 ┃      SayHelloStream «stream          ┃│ Send a request to see the response.                      │
-┃                                      ┃│                                                          │
-┃                                      ┃│                                                          │
+┃      CollectHellos stream»           ┃│                                                          │
+┃      Converse «stream»               ┃│                                                          │
 ┃                                      ┃│                                                          │
 ┃                                      ┃│                                                          │
 ┃                                      ┃│                                                          │
@@ -20,5 +20,5 @@
 ┃                                      ┃│                                                          │
 ┃                                      ┃│                                                          │
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛╰──────────────────────────────────────────────────────────╯
- localhost:50051  •  2 services  •  3 methods 
+ localhost:50051  •  2 services  •  5 methods 
 ↑/k up • ↓/j down • enter select/edit • ctrl+s send • tab next panel • ? help • q quit
