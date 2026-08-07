@@ -34,6 +34,12 @@ type KeyMap struct {
 	Collapse key.Binding
 	Toggle   key.Binding
 
+	// Add and Remove grow and shrink a repeated field in the request form. They
+	// are plain letters rather than modified keys because filling in a list of a
+	// dozen items is a keystroke-per-item job.
+	Add    key.Binding
+	Remove key.Binding
+
 	Send   key.Binding
 	Cancel key.Binding
 
@@ -102,6 +108,14 @@ func Default() KeyMap {
 			key.WithKeys(" "),
 			key.WithHelp("space", "toggle"),
 		),
+		Add: key.NewBinding(
+			key.WithKeys("a", "+"),
+			key.WithHelp("a", "add item"),
+		),
+		Remove: key.NewBinding(
+			key.WithKeys("d", "-"),
+			key.WithHelp("d", "remove item"),
+		),
 		Send: key.NewBinding(
 			key.WithKeys("ctrl+s"),
 			key.WithHelp("ctrl+s", "send"),
@@ -151,7 +165,10 @@ func (k KeyMap) FullHelp() [][]key.Binding {
 		// taking one of its own: a sixth column pushes the bar past 100 cells,
 		// where it gets truncated and the last one disappears entirely.
 		{k.Select, k.Expand, k.Collapse, k.Toggle, k.ScrollLeft, k.ScrollRight},
-		{k.Send, k.Cancel},
+		// Add and Remove edit the request the way send and cancel run it, and
+		// sharing a column with them keeps the bar at five columns: a sixth pushes
+		// it past 100 cells, where the last one is truncated away entirely.
+		{k.Add, k.Remove, k.Send, k.Cancel},
 		{k.NextPanel, k.PrevPanel},
 		{k.Retry, k.Help, k.Quit},
 	}

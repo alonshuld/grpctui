@@ -3,22 +3,22 @@
 │   ▾ demo.v1.Echo                     │┃ demo.v1.Greeter.SayHello  unary                          ┃
 │      Echo                            │┃ demo.v1.HelloRequest                                     ┃
 │   ▾ demo.v1.Greeter                  │┃                                                          ┃
-│ ❯    SayHello                        │┃   name    string                                         ┃
-│      SayHelloStream «stream          │┃   times   int32                                          ┃
-│                                      │┃   shout   bool            false                          ┃
-│                                      │┃ ❯ volume  demo.v1.Volume  press enter to edit            ┃
-│                                      │┃           one of: VOLUME_UNSPECIFIED, VOLUME_QUIET, VOL… ┃
-│                                      │┃   aliases repeated string repeated fields arrive in v0.3 ┃
+│ ❯    SayHello                        │┃   name                   string                          ┃
+│      SayHelloStream «stream          │┃   times                  int32                           ┃
+│                                      │┃   shout                  bool            false           ┃
+│                                      │┃ ❯ ▾ volume               demo.v1.Volume  press enter to… ┃
+│                                      │┃     ○ VOLUME_UNSPECIFIED = 0                             ┃
+│                                      │┃     ○ VOLUME_QUIET       = 1                             ┃
+│                                      │┃     ○ VOLUME_LOUD        = 2                             ┃
+│                                      │┃   ▸ aliases              repeated string                 ┃
+│                                      │┃   ▸ address              demo.v1.Address                 ┃
+│                                      │┃   ▸ greeting             oneof                           ┃
 │                                      │┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 │                                      │╭──────────────────────────────────────────────────────────╮
 │                                      ││ Response                                                 │
 │                                      ││ demo.v1.HelloReply                                       │
 │                                      ││                                                          │
 │                                      ││ Press ctrl+s to send the request.                        │
-│                                      ││                                                          │
-│                                      ││                                                          │
-│                                      ││                                                          │
-│                                      ││                                                          │
 ╰──────────────────────────────────────╯╰──────────────────────────────────────────────────────────╯
  localhost:50051  •  2 services  •  3 methods 
 ↑/k up • ↓/j down • enter select/edit • ctrl+s send • tab next panel • ? help • q quit

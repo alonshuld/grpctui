@@ -3,19 +3,19 @@
 ┃   ▾ demo.v1.Echo                     ┃│ demo.v1.Greeter.SayHello  unary                          │
 ┃      Echo                            ┃│ demo.v1.HelloRequest                                     │
 ┃   ▾ demo.v1.Greeter                  ┃│                                                          │
-┃ ❯    SayHello                        ┃│ ❯ name    string                                         │
-┃      SayHelloStream «stream          ┃│   times   int32                                          │
-┃                                      ┃│   shout   bool            false                          │
-┃                                      ┃│   volume  demo.v1.Volume                                 │
-┃                                      ┃│   aliases repeated string repeated fields arrive in v0.3 │
+┃ ❯    SayHello                        ┃│ ❯ name       string                                      │
+┃      SayHelloStream «stream          ┃│   times      int32                                       │
+┃                                      ┃│   shout      bool            false                       │
+┃                                      ┃│   ▸ volume   demo.v1.Volume                              │
+┃                                      ┃│   ▸ aliases  repeated string                             │
+┃                                      ┃│   ▸ address  demo.v1.Address                             │
+┃                                      ┃│   ▸ greeting oneof                                       │
 ┃                                      ┃╰──────────────────────────────────────────────────────────╯
 ┃                                      ┃╭──────────────────────────────────────────────────────────╮
 ┃                                      ┃│ Response                                                 │
 ┃                                      ┃│ demo.v1.HelloReply                                       │
 ┃                                      ┃│                                                          │
 ┃                                      ┃│ Press ctrl+s to send the request.                        │
-┃                                      ┃│                                                          │
-┃                                      ┃│                                                          │
 ┃                                      ┃│                                                          │
 ┃                                      ┃│                                                          │
 ┃                                      ┃│                                                          │
