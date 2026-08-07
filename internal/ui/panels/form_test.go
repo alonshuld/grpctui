@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/descriptorpb"
 
@@ -307,4 +308,165 @@ func TestForm_SurvivesDegenerateSizes(t *testing.T) {
 
 		assert.NotPanics(t, func() { _ = form.View() })
 	}
+}
+
+// Row order again, for the tests below: the bool is proto3_optional, the last
+// field of FieldDescriptorProto — and, being a proto2 field, one with explicit
+// presence, so false and unset are genuinely different answers.
+const (
+	fieldTypeName       = 4  // string
+	fieldProto3Optional = 10 // bool, with presence
+)
+
+// A page jump moves by the field rows on screen, not by the panel's height. The
+// two are not the same number: the header takes three lines before the first
+// field, and every hint takes another, so paging by the height steps over
+// fields the user never saw.
+func TestForm_PagesByVisibleFieldRows(t *testing.T) {
+	form := newForm(t)
+	form.SetSize(60, 8) // header (3 lines) + 5 field rows
+
+	form, _ = pressForm(t, form, "ctrl+d")
+
+	view := form.View()
+	assert.Contains(t, view, "❯ type_name", "a page down should land on the last field that was visible")
+	assert.NotContains(t, view, "❯ oneof_index", "a page down overshot by the header")
+
+	form, _ = pressForm(t, form, "ctrl+u")
+	assert.Contains(t, form.View(), "❯ name", "a page up should come back to the top")
+}
+
+func TestForm_PagingStopsAtTheEnds(t *testing.T) {
+	form := newForm(t)
+	form.SetSize(60, 8)
+
+	form, _ = pressForm(t, form, "ctrl+u", "ctrl+u")
+	assert.Contains(t, form.View(), "❯ name")
+
+	for range 10 {
+		form, _ = pressForm(t, form, "ctrl+d")
+	}
+	assert.Contains(t, form.View(), "❯ proto3_optional")
+}
+
+// Space cycles a bool between an explicit true and an explicit false. The
+// second is not the same as never having touched the field: for a bool with
+// presence — which every proto2 field has — false is a value the caller can
+// only send by saying so.
+func TestForm_BoolTogglesBetweenTrueAndFalse(t *testing.T) {
+	form := newForm(t)
+	form = down(t, form, fieldProto3Optional)
+
+	form, _ = pressForm(t, form, " ")
+	msg, ok := form.Submit()
+	require.True(t, ok)
+	assert.True(t, boolField(t, msg.Request, "proto3_optional"))
+
+	form, _ = pressForm(t, form, " ")
+	msg, ok = form.Submit()
+	require.True(t, ok)
+	assert.False(t, boolField(t, msg.Request, "proto3_optional"))
+	assert.True(t, fieldIsSet(t, msg.Request, "proto3_optional"),
+		"a toggled-off bool must be sent as an explicit false, not dropped")
+}
+
+func TestForm_AnUntouchedBoolIsNotSent(t *testing.T) {
+	form := newForm(t)
+
+	msg, ok := form.Submit()
+
+	require.True(t, ok)
+	assert.False(t, fieldIsSet(t, msg.Request, "proto3_optional"),
+		"a bool nobody toggled must not be sent at all")
+}
+
+// Typing a value and then deleting it is how a user says "explicitly empty",
+// and it has to be distinguishable from never having visited the field.
+func TestForm_ClearingAFieldSendsAnExplicitEmptyValue(t *testing.T) {
+	form := newForm(t)
+	form = down(t, form, fieldTypeName)
+
+	form, _ = pressForm(t, form, "enter", "x", "backspace", "esc")
+
+	msg, ok := form.Submit()
+	require.True(t, ok)
+	assert.True(t, fieldIsSet(t, msg.Request, "type_name"),
+		`a field the user cleared must be sent as ""`)
+	assert.Empty(t, stringField(t, msg.Request, "type_name"))
+}
+
+func TestForm_AnUntouchedFieldIsNotSent(t *testing.T) {
+	form := newForm(t)
+
+	msg, ok := form.Submit()
+
+	require.True(t, ok)
+	assert.False(t, fieldIsSet(t, msg.Request, "type_name"),
+		"a field nobody visited must not be sent")
+}
+
+// Opening a field and leaving it without typing is not the same as clearing it.
+func TestForm_EnteringAFieldWithoutTypingLeavesItUnset(t *testing.T) {
+	form := newForm(t)
+	form = down(t, form, fieldTypeName)
+
+	form, _ = pressForm(t, form, "enter", "esc")
+
+	msg, ok := form.Submit()
+	require.True(t, ok)
+	assert.False(t, fieldIsSet(t, msg.Request, "type_name"))
+}
+
+func requestField(t *testing.T, msg proto.Message, name string) (protoreflect.Message, protoreflect.FieldDescriptor) {
+	t.Helper()
+
+	m := msg.ProtoReflect()
+	fd := m.Descriptor().Fields().ByName(protoreflect.Name(name))
+	require.NotNil(t, fd, "no field %q on %s", name, m.Descriptor().FullName())
+	return m, fd
+}
+
+func fieldIsSet(t *testing.T, msg proto.Message, name string) bool {
+	t.Helper()
+	m, fd := requestField(t, msg, name)
+	return m.Has(fd)
+}
+
+func boolField(t *testing.T, msg proto.Message, name string) bool {
+	t.Helper()
+	m, fd := requestField(t, msg, name)
+	return m.Get(fd).Bool()
+}
+
+func stringField(t *testing.T, msg proto.Message, name string) string {
+	t.Helper()
+	m, fd := requestField(t, msg, name)
+	return m.Get(fd).String()
+}
+
+// A field with presence has a state an ordinary field does not — filled in with
+// nothing — and one it does not share with its own zero value. The row has to
+// distinguish them, or the user cannot tell what will be sent.
+func TestForm_MarksPresenceFieldsThatAreUnsetOrEmpty(t *testing.T) {
+	form := newForm(t)
+
+	t.Run("an untouched bool with presence is not false", func(t *testing.T) {
+		assert.Contains(t, form.View(), "unset")
+	})
+
+	t.Run("a toggled bool shows its value", func(t *testing.T) {
+		toggled := down(t, form, fieldProto3Optional)
+		toggled, _ = pressForm(t, toggled, " ", " ")
+
+		view := toggled.View()
+		assert.Contains(t, view, "false")
+	})
+
+	t.Run("a cleared field is not the same as an untouched one", func(t *testing.T) {
+		cleared := down(t, form, fieldTypeName)
+		cleared, _ = pressForm(t, cleared, "enter", "x", "backspace", "esc")
+
+		assert.Contains(t, cleared.View(), `""`,
+			"a field cleared by hand will be sent as an empty value and must say so")
+	})
 }

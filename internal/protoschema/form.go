@@ -69,6 +69,29 @@ type Field struct {
 // Editable reports whether the user can put a value into this field.
 func (f Field) Editable() bool { return f.Kind != KindUnsupported }
 
+// HasPresence reports whether the field distinguishes "set to its zero value"
+// from "not set" on the wire — proto3's `optional` keyword, or any proto2
+// optional field. For every other field the two are the same thing, which is
+// why the form can leave a zero value out without changing what the server
+// sees.
+func (f Field) HasPresence() bool { return f.desc != nil && f.desc.HasPresence() }
+
+// AcceptsEmpty reports whether an empty form value is a value rather than the
+// absence of one, so that [Form.Build] sends it instead of skipping the field.
+//
+// That takes two things. The field must have presence, because without it an
+// empty value and an unset one are indistinguishable anyway. And its type must
+// have an empty form: a string or a bytes field can be explicitly empty, while
+// an empty number or enum box means the user typed nothing, since there is no
+// such number to type.
+//
+// Bools are absent from that list on purpose. The form stores an explicit
+// "false" for a toggled-off bool rather than "", so a bool never reaches Build
+// empty; see [KindBool].
+func (f Field) AcceptsEmpty() bool {
+	return f.HasPresence() && (f.Kind == KindString || f.Kind == KindBytes)
+}
+
 // Form is the editable shape of one request message.
 type Form struct {
 	// Name is the fully-qualified message name, e.g. "demo.v1.HelloRequest".

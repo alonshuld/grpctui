@@ -30,7 +30,10 @@ grpctui localhost:50051
 Pick a method with `j`/`k` and `enter`, `tab` into the request form, `enter` to
 edit a field and `esc` when you are done with it, then `ctrl+s` to send. The
 response arrives as JSON in the panel below the form; a non-OK call shows its
-gRPC status code and the server's message in the same place.
+gRPC status code and the server's message in the same place. A response JSON
+cannot represent — one carrying a `google.protobuf.Any` whose payload type the
+server never described — is shown in protobuf's text format instead, labelled
+as such, rather than reported as a failed call.
 
 ```
 Flags:
@@ -39,6 +42,7 @@ Flags:
   -log-file string    write logs to this file; empty disables logging
                       (default "$XDG_STATE_HOME/grpctui/grpctui.log")
   -log-level string   log level: debug, info, warn, error (default "error")
+  -call-timeout d     give up on a single call after this long (default 1m0s)
   -version            print the version and exit
 ```
 
@@ -83,8 +87,17 @@ number.
 
 Fields with a shape the form cannot edit yet — nested messages, repeated
 fields, maps and `oneof` members — are still listed, marked with the version
-that brings them (v0.3). A field left empty is left unset rather than sent as
-an explicit default.
+that brings them (v0.3).
+
+A field you never touch is left unset rather than sent as an explicit default.
+Clearing one you have typed into is different: for a field with explicit
+presence (proto3's `optional`, or any proto2 field) that sends an explicit
+empty value, which is otherwise impossible to express. The same goes for
+`space` on a `bool` — toggling it off sends an explicit `false`, where never
+toggling it sends nothing at all.
+
+Those fields say which state they are in: `unset` for one that will not be
+sent, `""` for one that will be sent empty.
 
 ## Keybindings
 
@@ -94,6 +107,7 @@ an explicit default.
 | `ctrl+u`, `ctrl+d` | Page up / down |
 | `g`, `G` | Jump to top / bottom |
 | `→`/`l`, `←`/`h` | Expand / collapse a service |
+| `L`/`⇧→`, `H`/`⇧←` | Scroll the response left / right |
 | `enter` | Toggle a service, select a method, or edit a field |
 | `space` | Toggle a `bool` field |
 | `ctrl+s` | Send the request |

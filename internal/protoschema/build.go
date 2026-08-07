@@ -32,10 +32,17 @@ func (e *FieldError) Unwrap() error { return e.Err }
 // Build turns filled-in form values, keyed by field name, into a request
 // message.
 //
-// An absent or empty value leaves the field at its protobuf default rather than
-// setting it explicitly — "" and "unset" are the same thing in proto3, and
-// treating them differently would put empty strings on the wire for every field
-// the user skipped. Values for [KindUnsupported] fields are ignored.
+// A field absent from values is left alone, and so is one whose value is empty
+// — "" and "unset" are the same thing for an ordinary proto3 field, and treating
+// them differently would put empty strings on the wire for every field the user
+// skipped. Values for [KindUnsupported] fields are ignored.
+//
+// The exception is a field with explicit presence — proto3's `optional`, or a
+// proto2 optional — whose type has an empty value the user can actually mean.
+// For those, a present-but-empty entry is sent as an explicit empty value, which
+// is the only way the caller can say "" rather than "nothing". Which is why an
+// untouched field must be left out of values entirely rather than mapped to "":
+// see [Field.AcceptsEmpty].
 //
 // Every unparseable value is reported, not just the first: a form that fails
 // one field at a time is miserable to fill in. The returned error joins one
@@ -50,7 +57,10 @@ func (f Form) Build(values map[string]string) (proto.Message, error) {
 
 	for _, field := range f.Fields {
 		raw, ok := values[field.Name]
-		if !ok || raw == "" || !field.Editable() {
+		if !ok || !field.Editable() {
+			continue
+		}
+		if raw == "" && !field.AcceptsEmpty() {
 			continue
 		}
 

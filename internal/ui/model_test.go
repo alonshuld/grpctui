@@ -11,6 +11,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/exp/teatest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,6 +21,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/dynamicpb"
+	"google.golang.org/protobuf/types/known/anypb"
 
 	"github.com/alonshuld/grpctui/internal/grpcclient"
 	"github.com/alonshuld/grpctui/internal/ui"
@@ -889,6 +891,7 @@ func TestModel_SurvivesTinyTerminals(t *testing.T) {
 				m = asModel(t, mustUpdate(m, discoveryResult(t, m)))
 
 				assert.NotPanics(t, func() { _ = m.View() })
+				assertFitsTerminal(t, m.View(), size.w, size.h)
 
 				// And with a method selected, which is what fills the panels.
 				m, cmd := press(t, m, "j", "enter")
@@ -896,8 +899,32 @@ func TestModel_SurvivesTinyTerminals(t *testing.T) {
 					m = asModel(t, mustUpdate(m, cmd()))
 				}
 				assert.NotPanics(t, func() { _ = m.View() })
+				assertFitsTerminal(t, m.View(), size.w, size.h)
 			})
 		}
+	}
+}
+
+// assertFitsTerminal pins the invariant that surviving a tiny terminal is not
+// the same as fitting in one: a frame with more rows than the window scrolls
+// the screen and strands the previous frame above it, and one with wider rows
+// wraps them, which desynchronises every row below.
+//
+// The panel minimums cannot all be met below about 30x12, so on the sizes this
+// runs at the layout necessarily asks for more room than exists. What must hold
+// is that nothing it asks for reaches the terminal.
+func assertFitsTerminal(t *testing.T, view string, width, height int) {
+	t.Helper()
+
+	if view == "" {
+		return
+	}
+
+	lines := strings.Split(view, "\n")
+	assert.LessOrEqual(t, len(lines), height, "the frame is taller than the terminal")
+	for i, line := range lines {
+		assert.LessOrEqual(t, lipgloss.Width(line), width,
+			"line %d runs past the right edge: %q", i, line)
 	}
 }
 
@@ -915,4 +942,119 @@ func TestModel_SelectingAMethodKeepsFocusOnTheTree(t *testing.T) {
 	// j must still walk the tree.
 	m, _ = press(t, m, "j")
 	assert.Contains(t, m.View(), "❯ ▾ demo.v1.Greeter")
+}
+
+// Selecting another method while a call is out is the user moving on. The call
+// belongs to the method they have left, so it is cancelled and its answer
+// dropped — otherwise it lands in the panel under the new method's name, as if
+// it were an answer to that, and esc has stopped being able to cancel it
+// because the panel is no longer in its in-flight state.
+func TestModel_SelectingAnotherMethodAbandonsTheCallInFlight(t *testing.T) {
+	client := healthyClient()
+
+	callCtx := make(chan context.Context, 1)
+	release := make(chan struct{})
+	client.invoke = func(ctx context.Context, method grpcclient.Method, _ proto.Message) (*grpcclient.UnaryResponse, error) {
+		callCtx <- ctx
+		<-release
+		return &grpcclient.UnaryResponse{
+			Message:  reply(method, map[string]any{"greeting": "ANSWER-FOR-SAYHELLO"}),
+			Duration: time.Millisecond,
+		}, nil
+	}
+
+	m := settled(t, newModel(t, client))
+	m = selectMethod(t, m, 3) // demo.v1.Greeter.SayHello
+
+	m, cmd := press(t, m, "ctrl+s")
+	require.NotNil(t, cmd)
+
+	results := make(chan tea.Msg, 4)
+	go func() {
+		defer close(results)
+		for _, msg := range drain(cmd) {
+			results <- msg
+		}
+	}()
+
+	started := <-callCtx
+	require.Contains(t, m.View(), "Calling SayHello…")
+
+	// The user picks a different method. demo.v1.Echo is the first service.
+	echo := testServices()[0]
+	m = asModel(t, mustUpdate(m, panels.MethodSelectedMsg{Service: echo, Method: echo.Methods[0]}))
+
+	require.Error(t, started.Err(), "the abandoned call was left running")
+
+	// Its answer arrives anyway, as it would from a server that had already
+	// begun replying.
+	close(release)
+	for msg := range results {
+		if _, isTick := msg.(spinner.TickMsg); isTick {
+			continue
+		}
+		m = asModel(t, mustUpdate(m, msg))
+	}
+
+	view := m.View()
+	assert.Contains(t, view, "demo.v1.EchoRequest", "the form should have moved to the new method")
+	assert.NotContains(t, view, "ANSWER-FOR-SAYHELLO",
+		"the abandoned call's answer was drawn under the newly selected method")
+	assert.Contains(t, view, "Press ctrl+s to send the request.",
+		"the response panel should be waiting for a call to the new method")
+}
+
+// A response that JSON cannot represent is still a response. Reporting it as a
+// failed call would be a lie about what the server did.
+func TestModel_AResponseThatIsNotJSONIsStillASuccess(t *testing.T) {
+	client := healthyClient()
+	client.invoke = func(_ context.Context, _ grpcclient.Method, _ proto.Message) (*grpcclient.UnaryResponse, error) {
+		return &grpcclient.UnaryResponse{
+			// An Any whose payload type this client has never seen, which is
+			// what protojson refuses outright.
+			Message: &anypb.Any{
+				TypeUrl: "type.googleapis.com/some.server.only.Detail",
+				Value:   []byte{0x0a, 0x03, 'a', 'b', 'c'},
+			},
+			Duration: 7 * time.Millisecond,
+		}, nil
+	}
+
+	m := settled(t, newModel(t, client))
+	m = selectMethod(t, m, 3)
+
+	m, cmd := press(t, m, "ctrl+s")
+	require.NotNil(t, cmd)
+	m = apply(t, m, cmd)
+
+	view := m.View()
+	assert.Contains(t, view, "OK")
+	assert.NotContains(t, view, "Call failed", "a successful call was reported as a failure")
+	assert.Contains(t, view, "protobuf text", "the panel should say why the body is not JSON")
+	assert.Contains(t, view, "some.server.only.Detail")
+}
+
+// The 60-second default is generous on purpose, but a service that legitimately
+// takes longer — or a user who wants a shorter leash while debugging — needs it
+// to be reachable rather than compiled in.
+func TestModel_CallTimeoutIsConfigurable(t *testing.T) {
+	client := healthyClient()
+	client.invoke = func(ctx context.Context, _ grpcclient.Method, _ proto.Message) (*grpcclient.UnaryResponse, error) {
+		<-ctx.Done()
+		return nil, fmt.Errorf("invoke: %w", status.FromContextError(ctx.Err()).Err())
+	}
+
+	m := sized(t, ui.New(client,
+		ui.WithLogger(zaptest.NewLogger(t)),
+		ui.WithCallTimeout(time.Millisecond),
+	))
+	m = asModel(t, mustUpdate(m, discoveryResult(t, m)))
+	m = selectMethod(t, m, 3)
+
+	m, cmd := press(t, m, "ctrl+s")
+	require.NotNil(t, cmd)
+	m = apply(t, m, cmd)
+
+	assert.Contains(t, m.View(), "DeadlineExceeded",
+		"the call outlived the timeout the model was built with")
 }

@@ -34,10 +34,19 @@ const (
 	minValueWidth  = 8
 	rowPrefixWidth = 2
 
-	// boolTrue is the only value a bool field ever stores; "off" is the empty
-	// value, since an unset proto3 bool and a false one are the same thing on
-	// the wire.
-	boolTrue = "true"
+	// boolTrue and boolFalse are the two values a bool field stores once it has
+	// been toggled. A toggled-off bool holds "false" rather than "", so that an
+	// `optional bool` can be sent as an explicit false; an untouched one holds
+	// "" and is left out of the request entirely. For a plain proto3 bool the
+	// distinction costs nothing — setting one to false puts nothing on the wire.
+	boolTrue  = "true"
+	boolFalse = "false"
+
+	// unsetLabel and emptyLabel mark the two states a field with explicit
+	// presence can be in that an ordinary field cannot: never filled in, and
+	// filled in with nothing. Only such a field ever shows either.
+	unsetLabel = "unset"
+	emptyLabel = `""`
 )
 
 // Form is the request form for the selected method: one row per field of the
@@ -66,6 +75,15 @@ type Form struct {
 	fieldErrs map[string]string
 	notice    string
 
+	// lines is the rendered panel, cached. One keystroke asks for it four to six
+	// times over — the scroll clamp, the root model's layout, this panel's own
+	// View — and building it is O(fields) of styled string assembly, which is
+	// the difference between a responsive form and a sluggish one on the large
+	// schemas v1.0 targets. Every mutation refreshes it; [Form.render] rebuilds
+	// on the fly when it is nil, so a Form that has never been touched is still
+	// correct.
+	lines []line
+
 	width   int
 	height  int
 	focused bool
@@ -77,6 +95,12 @@ type Form struct {
 type formField struct {
 	field protoschema.Field
 	input textinput.Model
+
+	// touched records that the user has changed this field's value, which is
+	// how an explicitly cleared field is told apart from one never visited. It
+	// is the difference between sending an `optional string` as "" and leaving
+	// it unset; see [protoschema.Field.AcceptsEmpty].
+	touched bool
 }
 
 // NewForm builds an empty request form.
@@ -121,6 +145,7 @@ func newFieldInput(st styles.Styles) textinput.Model {
 // Clear returns the panel to its empty state.
 func (f *Form) Clear() {
 	*f = Form{keys: f.keys, styles: f.styles, width: f.width, height: f.height, focused: f.focused}
+	f.refresh()
 }
 
 // SetSize sets the panel's inner content area.
@@ -132,12 +157,16 @@ func (f *Form) SetSize(width, height int) {
 }
 
 // Focus gives the panel focus.
-func (f *Form) Focus() { f.focused = true }
+func (f *Form) Focus() {
+	f.focused = true
+	f.refresh()
+}
 
 // Blur removes focus from the panel, ending any edit in progress.
 func (f *Form) Blur() {
 	f.StopEditing()
 	f.focused = false
+	f.refresh()
 }
 
 // Focused reports whether the panel has focus.
@@ -154,6 +183,7 @@ func (f *Form) StopEditing() {
 	}
 	f.editing = false
 	f.fields[f.cursor].input.Blur()
+	f.refresh()
 }
 
 // Method returns the method the form was built for, if any.
@@ -184,8 +214,17 @@ func (f Form) updateEditing(msg tea.KeyMsg) (Form, tea.Cmd) {
 		return f, nil
 	}
 
+	before := f.fields[f.cursor].input.Value()
+
 	var cmd tea.Cmd
 	f.fields[f.cursor].input, cmd = f.fields[f.cursor].input.Update(msg)
+
+	// Touched on a change, not on entering the edit: a user who opens a field
+	// and escapes straight back out has not asked for an explicit empty value.
+	if f.fields[f.cursor].input.Value() != before {
+		f.fields[f.cursor].touched = true
+	}
+	f.refresh()
 	return f, cmd
 }
 
@@ -214,6 +253,11 @@ func (f Form) updateBrowsing(msg tea.KeyMsg) (Form, tea.Cmd) {
 // Submit converts the form's values into a request message, or explains on the
 // panel why it cannot.
 func (f *Form) Submit() (SendRequestMsg, bool) {
+	// Every path below changes what the panel shows — an error row appears, or
+	// the last attempt's rows go away — so the cache is refreshed once, here,
+	// rather than at each of the four returns.
+	defer f.refresh()
+
 	f.fieldErrs = nil
 	f.notice = ""
 
@@ -235,10 +279,19 @@ func (f *Form) Submit() (SendRequestMsg, bool) {
 }
 
 // values collects what the user typed, keyed by field name.
+//
+// A field the user has never touched is left out altogether rather than mapped
+// to "". That absence is what tells [protoschema.Form.Build] the difference
+// between a field nobody filled in and one deliberately cleared — which for an
+// `optional` string is the difference between sending nothing and sending "".
 func (f Form) values() map[string]string {
 	out := make(map[string]string, len(f.fields))
 	for _, ff := range f.fields {
-		out[ff.field.Name] = ff.input.Value()
+		value := ff.input.Value()
+		if value == "" && !ff.touched {
+			continue
+		}
+		out[ff.field.Name] = value
 	}
 	return out
 }
@@ -272,19 +325,26 @@ func (f *Form) startEditing() {
 	f.editing = true
 	f.fields[f.cursor].input.Focus()
 	f.fields[f.cursor].input.CursorEnd()
+	f.refresh()
 }
 
-// toggle flips a bool field.
+// toggle flips a bool field between an explicit true and an explicit false.
+// Neither is the untouched state the field started in, which is why toggling
+// twice is not the same as never toggling at all: for an `optional bool` the
+// first sends false and the second sends nothing.
 func (f *Form) toggle() {
 	ff, ok := f.current()
 	if !ok || ff.field.Kind != protoschema.KindBool {
 		return
 	}
+
+	value := boolTrue
 	if ff.input.Value() == boolTrue {
-		f.fields[f.cursor].input.SetValue("")
-		return
+		value = boolFalse
 	}
-	f.fields[f.cursor].input.SetValue(boolTrue)
+	f.fields[f.cursor].input.SetValue(value)
+	f.fields[f.cursor].touched = true
+	f.refresh()
 }
 
 func (f Form) current() (formField, bool) {
@@ -310,16 +370,35 @@ func (f *Form) moveTo(i int) {
 	f.clampOffset()
 }
 
+// pageSize reports how many fields a page jump moves the cursor by.
+//
+// It counts the field rows currently on screen rather than the panel's height,
+// because the two are not the same number: the header takes three lines before
+// the first field, and every error row and enum hint takes another. Paging by
+// the height would step over fields the user never saw.
 func (f Form) pageSize() int {
-	if f.height > 1 {
-		return f.height - 1
+	lines := f.render()
+
+	rows := 0
+	for i := f.offset; i < len(lines) && i < f.offset+f.height; i++ {
+		if lines[i].field != noField {
+			rows++
+		}
 	}
-	return 1
+
+	// One row of overlap, so a page jump keeps a landmark from the page before.
+	return max(rows-1, 1)
 }
 
 // clampOffset scrolls just far enough to keep the cursor's row on screen.
+//
+// It refreshes the render cache first. Every mutation that moves the cursor or
+// resizes the panel comes through here, so doing it in one place is what keeps
+// the cache from going stale.
 func (f *Form) clampOffset() {
-	lines := f.render()
+	f.refresh()
+
+	lines := f.lines
 	if f.height <= 0 || len(lines) <= f.height {
 		f.offset = 0
 		return
@@ -393,8 +472,19 @@ type line struct {
 
 const noField = -1
 
-// render lays the whole panel out as rows, before scrolling.
+// render returns the panel's rows, from the cache when there is one.
 func (f Form) render() []line {
+	if f.lines != nil {
+		return f.lines
+	}
+	return f.build()
+}
+
+// refresh rebuilds the render cache. Every mutation calls it.
+func (f *Form) refresh() { f.lines = f.build() }
+
+// build lays the whole panel out as rows, before scrolling.
+func (f Form) build() []line {
 	if !f.selected {
 		lines := []line{plain(f.styles.Muted.Render("Select a method to build a request."))}
 		return append(lines, f.noticeLines()...)
@@ -424,7 +514,7 @@ func (f Form) noticeLines() []line {
 	if f.notice == "" {
 		return nil
 	}
-	return []line{plain(""), plain(truncate(f.styles.FieldError.Render(f.notice), f.width))}
+	return []line{plain(""), plain(styles.Truncate(f.styles.FieldError.Render(f.notice), f.width))}
 }
 
 func plain(text string) line { return line{text: text, field: noField} }
@@ -436,8 +526,8 @@ func (f Form) header() []line {
 	kind := f.styles.FieldType.Render(string(f.method.Kind()))
 
 	return []line{
-		plain(truncate(name+"  "+kind, f.width)),
-		plain(truncate(f.styles.Label.Render(f.method.InputType), f.width)),
+		plain(styles.Truncate(name+"  "+kind, f.width)),
+		plain(styles.Truncate(f.styles.Label.Render(f.method.InputType), f.width)),
 		plain(""),
 	}
 }
@@ -461,7 +551,7 @@ func (f Form) fieldRow(i int) string {
 	row := prefix + name + " " +
 		f.styles.FieldType.Render(padCell(ff.field.Type, f.typeWidth())) + " " +
 		f.valueCell(i)
-	return truncate(row, f.width)
+	return styles.Truncate(row, f.width)
 }
 
 // valueCell renders the right-hand column: the live text input while editing,
@@ -475,9 +565,19 @@ func (f Form) valueCell(i int) string {
 	case f.editing && i == f.cursor:
 		return ff.input.View()
 	case ff.field.Kind == protoschema.KindBool:
+		// A bool with presence has three states, not two: an untouched one is
+		// not sent at all, and rendering it as "false" would claim it was.
+		if !ff.touched && ff.field.HasPresence() {
+			return f.styles.FieldDisabled.Render(unsetLabel)
+		}
 		return f.styles.FieldValue.Render(boolLabel(ff.input.Value()))
 	case ff.input.Value() != "":
 		return f.styles.FieldValue.Render(ff.input.Value())
+	case ff.touched && ff.field.HasPresence():
+		// Cleared rather than never visited, which for a field with presence is
+		// the difference between sending "" and sending nothing. The two look
+		// identical unless the row says so.
+		return f.styles.FieldValue.Render(emptyLabel)
 	case i == f.cursor && f.focused:
 		return f.styles.FieldDisabled.Render("press enter to edit")
 	default:
@@ -504,7 +604,7 @@ func (f Form) hint(i int) string {
 // indented aligns a continuation row under the value column.
 func (f Form) indented(s string) string {
 	pad := rowPrefixWidth + f.nameWidth() + 1
-	return truncate(strings.Repeat(" ", pad)+s, f.width)
+	return styles.Truncate(strings.Repeat(" ", pad)+s, f.width)
 }
 
 func boolLabel(value string) string {
@@ -536,7 +636,7 @@ func padCell(s string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	s = truncate(s, width)
+	s = styles.Truncate(s, width)
 	if pad := width - lipgloss.Width(s); pad > 0 {
 		s += strings.Repeat(" ", pad)
 	}

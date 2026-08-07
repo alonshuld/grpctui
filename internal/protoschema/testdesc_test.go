@@ -42,6 +42,7 @@ import (
 //	  oneof choice { string by_name = 16; int32 by_id = 17; }
 //	  optional string note = 18;
 //	  int32 retry_count = 19;
+//	  optional bool verbose = 20;
 //	}
 //
 // Generating it would mean a protoc dependency in a repo that otherwise needs
@@ -119,12 +120,16 @@ func scalarsProto() *descriptorpb.DescriptorProto {
 			proto3Optional(scalarField("note", 18, descriptorpb.FieldDescriptorProto_TYPE_STRING), 1),
 			// A multi-word name, to pin protobuf's lowerCamelCase JSON mapping.
 			scalarField("retry_count", 19, descriptorpb.FieldDescriptorProto_TYPE_INT32),
+			// A bool with explicit presence, where false and unset are different
+			// things on the wire — unlike `flag` above.
+			proto3Optional(scalarField("verbose", 20, descriptorpb.FieldDescriptorProto_TYPE_BOOL), 2),
 		},
-		// The synthetic oneof backing `optional note` must follow every real
-		// one, which is why "choice" is declared first.
+		// The synthetic oneofs backing `optional note` and `optional verbose`
+		// must follow every real one, which is why "choice" is declared first.
 		OneofDecl: []*descriptorpb.OneofDescriptorProto{
 			{Name: proto.String("choice")},
 			{Name: proto.String("_note")},
+			{Name: proto.String("_verbose")},
 		},
 		NestedType: []*descriptorpb.DescriptorProto{{
 			Name: proto.String("LabelsEntry"),

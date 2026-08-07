@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/alonshuld/grpctui/internal/grpcclient"
+	"github.com/alonshuld/grpctui/internal/protoschema"
 	"github.com/alonshuld/grpctui/internal/ui/keys"
 	"github.com/alonshuld/grpctui/internal/ui/panels"
 	"github.com/alonshuld/grpctui/internal/ui/styles"
@@ -62,7 +63,7 @@ func TestResponse_Success(t *testing.T) {
 	r := newResponse(t)
 	r.SetInFlight(responseMethod())
 
-	r.SetSuccess("{\n  \"greeting\": \"hi\"\n}", 12*time.Millisecond)
+	r.SetSuccess("{\n  \"greeting\": \"hi\"\n}", protoschema.FormatJSON, 12*time.Millisecond)
 
 	assert.False(t, r.InFlight())
 	view := r.View()
@@ -144,7 +145,7 @@ func TestResponse_RewrapsOnResize(t *testing.T) {
 func TestResponse_Clear(t *testing.T) {
 	r := newResponse(t)
 	r.SetMethod(responseMethod())
-	r.SetSuccess(`{"greeting": "hi"}`, time.Millisecond)
+	r.SetSuccess(`{"greeting": "hi"}`, protoschema.FormatJSON, time.Millisecond)
 
 	r.Clear()
 
@@ -157,7 +158,7 @@ func TestResponse_Clear(t *testing.T) {
 // anything on screen.
 func TestResponse_SetMethodDropsTheOldResult(t *testing.T) {
 	r := newResponse(t)
-	r.SetSuccess(`{"greeting": "hi"}`, time.Millisecond)
+	r.SetSuccess(`{"greeting": "hi"}`, protoschema.FormatJSON, time.Millisecond)
 
 	r.SetMethod(responseMethod())
 
@@ -187,7 +188,7 @@ func TestResponse_IgnoresTicksWhenIdle(t *testing.T) {
 	tick, ok := cmd().(spinner.TickMsg)
 	require.True(t, ok)
 
-	r.SetSuccess("{}", time.Millisecond)
+	r.SetSuccess("{}", protoschema.FormatJSON, time.Millisecond)
 	_, next := r.Update(tick)
 
 	assert.Nil(t, next, "the spinner kept ticking after the call finished")
@@ -203,7 +204,7 @@ func TestResponse_ScrollsALongBody(t *testing.T) {
 	for i := range lines {
 		lines[i] = fmt.Sprintf("line %02d", i)
 	}
-	r.SetSuccess(strings.Join(lines, "\n"), time.Millisecond)
+	r.SetSuccess(strings.Join(lines, "\n"), protoschema.FormatJSON, time.Millisecond)
 
 	top := r.View()
 	r, _ = r.Update(keyMsg("j"))
@@ -220,4 +221,97 @@ func TestResponse_SurvivesDegenerateSizes(t *testing.T) {
 
 		assert.NotPanics(t, func() { _ = r.View() })
 	}
+}
+
+// The viewport truncates any line wider than the panel, so a body with a long
+// line is not merely off screen to the right — it is unreachable unless
+// something scrolls horizontally.
+func TestResponse_ScrollsALineWiderThanThePanel(t *testing.T) {
+	const tail = "END-OF-THE-LINE"
+
+	r := newResponse(t)
+	r.SetSize(30, 8)
+	r.Focus()
+	r.SetSuccess(`{"detail": "`+strings.Repeat("x", 80)+tail+`"}`, protoschema.FormatJSON, time.Millisecond)
+
+	require.NotContains(t, r.View(), tail, "the line was expected to start off screen")
+
+	for range 20 {
+		r, _ = r.Update(keyMsg("L"))
+	}
+	assert.Contains(t, r.View(), tail, "no keystroke reached the right-hand end of the line")
+
+	for range 20 {
+		r, _ = r.Update(keyMsg("H"))
+	}
+	assert.Contains(t, r.View(), `"detail"`, "scrolling back left did not return to the start")
+}
+
+func TestResponse_ScrollsHorizontallyWithShiftArrows(t *testing.T) {
+	const tail = "END-OF-THE-LINE"
+
+	r := newResponse(t)
+	r.SetSize(30, 8)
+	r.Focus()
+	r.SetSuccess(strings.Repeat("x", 80)+tail, protoschema.FormatJSON, time.Millisecond)
+
+	for range 20 {
+		r, _ = r.Update(keyMsg("shift+right"))
+	}
+	assert.Contains(t, r.View(), tail)
+}
+
+// A new result starts at the left again: keeping the previous body's horizontal
+// offset would open the next one part-way through a line.
+func TestResponse_ClearResetsTheHorizontalOffset(t *testing.T) {
+	r := newResponse(t)
+	r.SetSize(30, 8)
+	r.Focus()
+	r.SetSuccess(strings.Repeat("x", 80)+"TAIL", protoschema.FormatJSON, time.Millisecond)
+
+	for range 20 {
+		r, _ = r.Update(keyMsg("L"))
+	}
+	require.Contains(t, r.View(), "TAIL")
+
+	r.SetSuccess(`{"greeting": "hi"}`, protoschema.FormatJSON, time.Millisecond)
+
+	assert.Contains(t, r.View(), `{"greeting": "hi"}`)
+}
+
+// grpc-go lets a server raise a bare code with no message at all. Preferring
+// the empty status message over the error text leaves the panel showing a code
+// above nothing.
+func TestResponse_FailureWithAStatusButNoMessage(t *testing.T) {
+	r := newResponse(t)
+
+	r.SetFailure("invoke demo.v1.Greeter.SayHello: rpc error: code = NotFound",
+		grpcclient.CallStatus{Code: 5, Name: "NotFound"}, true, 3*time.Millisecond)
+
+	view := r.View()
+	assert.Contains(t, view, "NotFound (5)")
+	assert.Contains(t, view, "demo.v1.Greeter.SayHello",
+		"with no status message the raw error is the only text there is")
+}
+
+// A body that is not JSON is still a successful call, and the panel says which
+// it is rather than leaving the user to wonder why the braces went missing.
+func TestResponse_SaysWhenTheBodyIsNotJSON(t *testing.T) {
+	r := newResponse(t)
+
+	r.SetSuccess(`type_url:"type.googleapis.com/some.server.only.Detail"`,
+		protoschema.FormatText, 4*time.Millisecond)
+
+	view := r.View()
+	assert.Contains(t, view, "OK", "a call that came back is a success whatever its body looks like")
+	assert.Contains(t, view, "protobuf text")
+	assert.Contains(t, view, "some.server.only.Detail")
+}
+
+func TestResponse_SaysNothingAboutFormatForJSON(t *testing.T) {
+	r := newResponse(t)
+
+	r.SetSuccess(`{"greeting": "hi"}`, protoschema.FormatJSON, time.Millisecond)
+
+	assert.NotContains(t, r.View(), "protobuf text")
 }
