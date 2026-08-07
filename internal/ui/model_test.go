@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -45,12 +46,25 @@ type fakeClient struct {
 	// empty response message.
 	invoke      func(ctx context.Context, method grpcclient.Method, req proto.Message) (*grpcclient.UnaryResponse, error)
 	invocations atomic.Int32
+
+	// mu guards the headers each half of the transport layer was handed, which
+	// the tea.Cmds behind discovery and invocation write from their own
+	// goroutines.
+	mu           sync.Mutex
+	discoveryMD  grpcclient.Metadata
+	invocationMD grpcclient.Metadata
+
+	// closed counts Close calls, so a test can tell whether the model let go of
+	// a connection it replaced.
+	closed atomic.Int32
 }
 
 func (f *fakeClient) Target() string { return f.target }
 
-func (f *fakeClient) ListServices(ctx context.Context) ([]grpcclient.Service, error) {
+func (f *fakeClient) ListServices(ctx context.Context, md grpcclient.Metadata) ([]grpcclient.Service, error) {
 	f.calls.Add(1)
+	f.record(&f.discoveryMD, md)
+
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -60,8 +74,10 @@ func (f *fakeClient) ListServices(ctx context.Context) ([]grpcclient.Service, er
 	return f.services, nil
 }
 
-func (f *fakeClient) InvokeUnary(ctx context.Context, method grpcclient.Method, req proto.Message) (*grpcclient.UnaryResponse, error) {
+func (f *fakeClient) InvokeUnary(ctx context.Context, method grpcclient.Method, req proto.Message, md grpcclient.Metadata) (*grpcclient.UnaryResponse, error) {
 	f.invocations.Add(1)
+	f.record(&f.invocationMD, md)
+
 	if f.invoke != nil {
 		return f.invoke(ctx, method, req)
 	}
@@ -71,9 +87,60 @@ func (f *fakeClient) InvokeUnary(ctx context.Context, method grpcclient.Method, 
 	}, nil
 }
 
+// Close makes the fake an io.Closer, which is how the root model releases a
+// connection it opened.
+func (f *fakeClient) Close() error {
+	f.closed.Add(1)
+	return nil
+}
+
+func (f *fakeClient) record(into *grpcclient.Metadata, md grpcclient.Metadata) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	*into = md
+}
+
+// headers returns the metadata one half of the transport layer last received.
+func (f *fakeClient) headers(from func(*fakeClient) *grpcclient.Metadata) grpcclient.Metadata {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return *from(f)
+}
+
+func discoveryHeaders(f *fakeClient) *grpcclient.Metadata  { return &f.discoveryMD }
+func invocationHeaders(f *fakeClient) *grpcclient.Metadata { return &f.invocationMD }
+
 // healthyClient is a client that discovers the demo services and answers calls.
 func healthyClient() *fakeClient {
 	return &fakeClient{target: "localhost:50051", services: testServices()}
+}
+
+// goldenProfiles are the connections the headers and switcher goldens are shot
+// against: one of each kind of protection, and a credential that must never
+// appear in the picture.
+func goldenProfiles() []grpcclient.Profile {
+	return []grpcclient.Profile{
+		{
+			Name:   "local",
+			Target: "localhost:50051",
+			Metadata: grpcclient.Metadata{
+				{Key: "x-tenant", Value: "acme"},
+				{Key: "x-request-id", Value: "6f1c-42"},
+			},
+		},
+		{
+			Name:     "staging",
+			Target:   "api.staging.example.com:443",
+			Security: grpcclient.Security{TLS: true, CACert: "/etc/ssl/staging-ca.pem"},
+			Auth:     grpcclient.Auth{Kind: grpcclient.AuthBearer, Token: "s3cr3t"},
+		},
+		{
+			Name:     "prod",
+			Target:   "api.example.com:443",
+			Security: grpcclient.Security{TLS: true, ClientCert: "client.pem", ClientKey: "client-key.pem"},
+			Auth:     grpcclient.Auth{Kind: grpcclient.AuthBasic, Username: "alice", Password: "hunter2"},
+		},
+	}
 }
 
 // reply builds a response message for a method. Like the fixture it draws on,
@@ -103,9 +170,9 @@ func requestValue(t *testing.T, req proto.Message, name string) protoreflect.Val
 	return m.Get(fd)
 }
 
-func newModel(t *testing.T, client ui.Client) ui.Model {
+func newModel(t *testing.T, client ui.Client, opts ...ui.Option) ui.Model {
 	t.Helper()
-	return ui.New(client, ui.WithLogger(zaptest.NewLogger(t)))
+	return ui.New(client, append([]ui.Option{ui.WithLogger(zaptest.NewLogger(t))}, opts...)...)
 }
 
 // asModel narrows the tea.Model that Update returns back to ui.Model.
@@ -368,7 +435,7 @@ func TestModel_RetryIgnoredWhenNotFailed(t *testing.T) {
 	assert.Equal(t, int32(1), client.calls.Load())
 }
 
-func TestModel_TabCyclesFocusThroughThreePanels(t *testing.T) {
+func TestModel_TabCyclesFocusThroughEveryPanel(t *testing.T) {
 	m := settled(t, newModel(t, healthyClient()))
 
 	// The tree owns focus first; j moves its cursor onto the Echo method.
@@ -380,7 +447,10 @@ func TestModel_TabCyclesFocusThroughThreePanels(t *testing.T) {
 	assert.Contains(t, m.View(), "❯    Echo",
 		"tree cursor moved while the request panel had focus")
 
-	// Response next, then back round to the tree.
+	// Headers, then response, then back round to the tree.
+	m, _ = press(t, m, "tab", "j")
+	assert.Contains(t, m.View(), "❯    Echo")
+
 	m, _ = press(t, m, "tab", "j")
 	assert.Contains(t, m.View(), "❯    Echo")
 
@@ -776,6 +846,7 @@ func TestModel_Golden(t *testing.T) {
 
 	tests := map[string]struct {
 		client func() ui.Client
+		opts   []ui.Option
 		steps  []goldenStep
 	}{
 		"browsing": {
@@ -833,6 +904,22 @@ func TestModel_Golden(t *testing.T) {
 			},
 			steps: append(selectSayHello, goldenStep{keys: []string{"ctrl+s"}, until: "PermissionDenied"}),
 		},
+		// The headers that ride along with every call, and the switcher that
+		// moves between the connections they belong to.
+		"request headers": {
+			client: func() ui.Client { return healthyClient() },
+			opts:   []ui.Option{ui.WithProfiles(goldenProfiles(), 0)},
+			steps: append(selectSayHello,
+				goldenStep{keys: []string{"tab", "tab"}, until: "x-tenant"},
+				goldenStep{keys: []string{"j", " "}, until: "○"},
+				goldenStep{keys: []string{"k"}, until: "❯ ●"},
+			),
+		},
+		"connection switcher": {
+			client: func() ui.Client { return healthyClient() },
+			opts:   []ui.Option{ui.WithProfiles(goldenProfiles(), 0)},
+			steps:  []goldenStep{{until: discovered}, {keys: []string{"p"}, until: "Connections"}},
+		},
 		"full help": {
 			client: func() ui.Client { return healthyClient() },
 			steps:  []goldenStep{{until: discovered}, {keys: []string{"?"}, until: "page up"}},
@@ -853,7 +940,7 @@ func TestModel_Golden(t *testing.T) {
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			tm := teatest.NewTestModel(t,
-				newModel(t, tt.client()),
+				newModel(t, tt.client(), tt.opts...),
 				teatest.WithInitialTermSize(termWidth, termHeight),
 			)
 
@@ -903,7 +990,7 @@ func TestModel_SurvivesTinyTerminals(t *testing.T) {
 	for state, newClient := range clients {
 		for _, size := range sizes {
 			t.Run(fmt.Sprintf("%s %dx%d", state, size.w, size.h), func(t *testing.T) {
-				m := newModel(t, newClient())
+				m := newModel(t, newClient(), ui.WithProfiles(goldenProfiles(), 0))
 
 				next, _ := m.Update(tea.WindowSizeMsg{Width: size.w, Height: size.h})
 				m = asModel(t, next)
@@ -917,6 +1004,17 @@ func TestModel_SurvivesTinyTerminals(t *testing.T) {
 				if cmd != nil {
 					m = asModel(t, mustUpdate(m, cmd()))
 				}
+				assert.NotPanics(t, func() { _ = m.View() })
+				assertFitsTerminal(t, m.View(), size.w, size.h)
+
+				// The headers panel, which turns the right-hand column into
+				// three boxes where there was barely room for two.
+				m, _ = press(t, m, "tab", "tab")
+				assert.NotPanics(t, func() { _ = m.View() })
+				assertFitsTerminal(t, m.View(), size.w, size.h)
+
+				// And the connection switcher, which is a box of its own.
+				m, _ = press(t, m, "shift+tab", "shift+tab", "p")
 				assert.NotPanics(t, func() { _ = m.View() })
 				assertFitsTerminal(t, m.View(), size.w, size.h)
 			})

@@ -37,7 +37,7 @@ func TestClient_ListServices(t *testing.T) {
 	ts := startTestServer(t)
 	c := ts.client(t)
 
-	services, err := c.ListServices(context.Background())
+	services, err := c.ListServices(context.Background(), nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, services)
 
@@ -105,7 +105,7 @@ func TestClient_ListServices_ReflectionUnavailable(t *testing.T) {
 	ts := startTestServer(t, withoutReflection())
 	c := ts.client(t)
 
-	_, err := c.ListServices(context.Background())
+	_, err := c.ListServices(context.Background(), nil)
 
 	require.Error(t, err)
 	require.ErrorIs(t, err, grpcclient.ErrReflectionUnavailable)
@@ -120,7 +120,7 @@ func TestClient_ListServices_ServerDown(t *testing.T) {
 	c := ts.client(t)
 	ts.stop()
 
-	_, err := c.ListServices(context.Background())
+	_, err := c.ListServices(context.Background(), nil)
 
 	require.Error(t, err)
 	require.NotErrorIs(t, err, grpcclient.ErrReflectionUnavailable)
@@ -137,7 +137,7 @@ func TestClient_ListServices_ContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := c.ListServices(ctx)
+	_, err := c.ListServices(ctx, nil)
 
 	require.Error(t, err)
 
@@ -153,7 +153,7 @@ func TestClient_ListServices_DeadlineExceeded(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
 	defer cancel()
 
-	_, err := c.ListServices(ctx)
+	_, err := c.ListServices(ctx, nil)
 
 	require.Error(t, err)
 

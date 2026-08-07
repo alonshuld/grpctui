@@ -23,7 +23,7 @@ import (
 func healthMethod(t *testing.T, c *grpcclient.Client, name string) grpcclient.Method {
 	t.Helper()
 
-	services, err := c.ListServices(context.Background())
+	services, err := c.ListServices(context.Background(), nil)
 	require.NoError(t, err)
 
 	svc, ok := findService(services, healthService)
@@ -63,7 +63,7 @@ func TestClient_InvokeUnary(t *testing.T) {
 	c := ts.client(t)
 	method := healthMethod(t, c, "Check")
 
-	resp, err := c.InvokeUnary(context.Background(), method, checkRequest(t, method, ""))
+	resp, err := c.InvokeUnary(context.Background(), method, checkRequest(t, method, ""), nil)
 
 	require.NoError(t, err)
 	require.NotNil(t, resp)
@@ -88,7 +88,7 @@ func TestClient_InvokeUnary_NonOKStatus(t *testing.T) {
 	c := ts.client(t)
 	method := healthMethod(t, c, "Check")
 
-	resp, err := c.InvokeUnary(context.Background(), method, checkRequest(t, method, "no.such.Service"))
+	resp, err := c.InvokeUnary(context.Background(), method, checkRequest(t, method, "no.such.Service"), nil)
 
 	require.Error(t, err)
 	assert.Nil(t, resp)
@@ -118,7 +118,7 @@ func TestClient_InvokeUnary_ContextCancelled(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	_, err := c.InvokeUnary(ctx, method, checkRequest(t, method, ""))
+	_, err := c.InvokeUnary(ctx, method, checkRequest(t, method, ""), nil)
 
 	require.Error(t, err)
 	assert.Less(t, time.Since(start), 5*time.Second, "cancelling did not abort the call")
@@ -136,7 +136,7 @@ func TestClient_InvokeUnary_DeadlineExceeded(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
-	_, err := c.InvokeUnary(ctx, method, checkRequest(t, method, ""))
+	_, err := c.InvokeUnary(ctx, method, checkRequest(t, method, ""), nil)
 
 	require.Error(t, err)
 	st, ok := status.FromError(err)
@@ -150,7 +150,7 @@ func TestClient_InvokeUnary_ServerUnreachable(t *testing.T) {
 	method := healthMethod(t, c, "Check")
 	ts.stop()
 
-	_, err := c.InvokeUnary(context.Background(), method, checkRequest(t, method, ""))
+	_, err := c.InvokeUnary(context.Background(), method, checkRequest(t, method, ""), nil)
 
 	require.Error(t, err)
 	st, ok := status.FromError(err)
@@ -170,7 +170,7 @@ func TestClient_InvokeUnary_ServerClosesMidCall(t *testing.T) {
 	}()
 
 	start := time.Now()
-	_, err := c.InvokeUnary(context.Background(), method, checkRequest(t, method, ""))
+	_, err := c.InvokeUnary(context.Background(), method, checkRequest(t, method, ""), nil)
 
 	require.Error(t, err)
 	assert.Less(t, time.Since(start), 5*time.Second, "the call outlived the server")
@@ -184,7 +184,7 @@ func TestClient_InvokeUnary_RejectsStreamingMethods(t *testing.T) {
 	method := healthMethod(t, c, "Watch")
 	require.Equal(t, grpcclient.KindServerStreaming, method.Kind())
 
-	_, err := c.InvokeUnary(context.Background(), method, checkRequest(t, method, ""))
+	_, err := c.InvokeUnary(context.Background(), method, checkRequest(t, method, ""), nil)
 
 	require.ErrorIs(t, err, grpcclient.ErrStreamingUnsupported)
 }
@@ -196,14 +196,14 @@ func TestClient_InvokeUnary_RejectsBadArguments(t *testing.T) {
 
 	t.Run("no descriptor", func(t *testing.T) {
 		_, err := c.InvokeUnary(context.Background(),
-			grpcclient.Method{FullName: "demo.v1.Demo.Do"}, checkRequest(t, method, ""))
+			grpcclient.Method{FullName: "demo.v1.Demo.Do"}, checkRequest(t, method, ""), nil)
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "no descriptor")
 	})
 
 	t.Run("no request", func(t *testing.T) {
-		_, err := c.InvokeUnary(context.Background(), method, nil)
+		_, err := c.InvokeUnary(context.Background(), method, nil, nil)
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "no request message")

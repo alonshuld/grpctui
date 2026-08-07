@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -42,12 +43,12 @@ const DefaultCallTimeout = 60 * time.Second
 // Discoverer is the discovery half of the transport layer.
 type Discoverer interface {
 	Target() string
-	ListServices(ctx context.Context) ([]grpcclient.Service, error)
+	ListServices(ctx context.Context, md grpcclient.Metadata) ([]grpcclient.Service, error)
 }
 
 // Invoker is the invocation half of the transport layer.
 type Invoker interface {
-	InvokeUnary(ctx context.Context, method grpcclient.Method, req proto.Message) (*grpcclient.UnaryResponse, error)
+	InvokeUnary(ctx context.Context, method grpcclient.Method, req proto.Message, md grpcclient.Metadata) (*grpcclient.UnaryResponse, error)
 }
 
 // Client is the slice of the transport layer the UI depends on. Keeping it an
@@ -57,6 +58,19 @@ type Client interface {
 	Discoverer
 	Invoker
 }
+
+// Dialer opens a connection for a profile. The root model uses it to switch
+// between saved connections without restarting, which is the whole point of
+// having profiles.
+type Dialer interface {
+	Dial(profile grpcclient.Profile) (Client, error)
+}
+
+// DialerFunc adapts a function to [Dialer].
+type DialerFunc func(profile grpcclient.Profile) (Client, error)
+
+// Dial implements [Dialer].
+func (f DialerFunc) Dial(profile grpcclient.Profile) (Client, error) { return f(profile) }
 
 type state int
 
@@ -68,9 +82,12 @@ const (
 
 type focus int
 
+// The tab cycle, in the order the panels are laid out: the tree down the left,
+// then the right-hand column from top to bottom.
 const (
 	focusTree focus = iota
 	focusRequest
+	focusMetadata
 	focusResponse
 
 	// focusCount is how many panels tab cycles through.
@@ -117,6 +134,29 @@ func WithCallTimeout(d time.Duration) Option {
 	}
 }
 
+// WithDialer supplies the way to open a connection for a profile. Without one
+// the profile switcher can list connections but not move between them, which is
+// what a UI test with a hand-made client gets.
+func WithDialer(d Dialer) Option {
+	return func(m *Model) {
+		if d != nil {
+			m.dialer = d
+		}
+	}
+}
+
+// WithProfiles supplies the saved connections and says which one the client
+// passed to [New] belongs to. The active profile's headers seed the metadata
+// panel.
+func WithProfiles(profiles []grpcclient.Profile, active int) Option {
+	return func(m *Model) {
+		m.profiles.SetProfiles(profiles, active)
+		if p, ok := m.profiles.Active(); ok {
+			m.metadata.SetHeaders(p.Metadata)
+		}
+	}
+}
+
 // Model is grpctui's root model.
 type Model struct {
 	client Client
@@ -136,7 +176,18 @@ type Model struct {
 
 	tree     panels.Tree
 	request  panels.Form
+	metadata panels.Metadata
 	response panels.Response
+
+	// profiles is the connection switcher. It is modal rather than a panel in
+	// the tab cycle: while it is open it owns the keyboard and covers the body.
+	profiles panels.Profiles
+
+	// dialer opens a connection for a profile, and ownsClient records whether
+	// the client currently held came from it — the one [New] was given belongs
+	// to the caller and is not this model's to close.
+	dialer     Dialer
+	ownsClient bool
 
 	state    state
 	err      error
@@ -148,8 +199,16 @@ type Model struct {
 	// of overwriting the newer one.
 	callSeq int
 
+	// connSeq does the same for connections: two quick presses in the switcher
+	// leave two dials in flight, and only the later one's client may be kept.
+	connSeq int
+
 	// cancelCall aborts the call in flight, if any.
 	cancelCall context.CancelFunc
+
+	// pendingTarget is the address being dialled, so the connecting screen names
+	// where it is going rather than where it has been.
+	pendingTarget string
 
 	width  int
 	height int
@@ -188,7 +247,9 @@ func New(client Client, opts ...Option) Model {
 		spinner:          sp,
 		tree:             panels.NewTree(km, st),
 		request:          panels.NewForm(km, st),
+		metadata:         panels.NewMetadata(km, st),
 		response:         panels.NewResponse(km, st),
+		profiles:         panels.NewProfiles(km, st),
 		state:            stateConnecting,
 		discoveryTimeout: DefaultDiscoveryTimeout,
 		callTimeout:      DefaultCallTimeout,
@@ -206,17 +267,40 @@ func (m Model) Init() tea.Cmd {
 }
 
 // discover runs one reflection sweep off the Update goroutine.
+//
+// It carries the metadata panel's headers: discovery is an RPC like any other,
+// so a server that gates its API behind a header gates its schema behind the
+// same one.
 func (m Model) discover() tea.Cmd {
 	client, parent, timeout := m.client, m.ctx, m.discoveryTimeout
+	md := m.metadata.Headers()
+
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(parent, timeout)
 		defer cancel()
 
-		services, err := client.ListServices(ctx)
+		services, err := client.ListServices(ctx, md)
 		if err != nil {
 			return discoveryFailedMsg{err: err}
 		}
 		return servicesDiscoveredMsg{services: services}
+	}
+}
+
+// connect opens a connection for a profile off the Update goroutine. Dialling
+// does no I/O of its own, but reading a CA bundle and a client key does, and
+// Update is not the place for it.
+func (m Model) connect(msg panels.ProfileSelectedMsg) tea.Cmd {
+	dialer, seq := m.dialer, m.connSeq
+	return func() tea.Msg {
+		client, err := dialer.Dial(msg.Profile)
+		return clientConnectedMsg{
+			seq:     seq,
+			index:   msg.Index,
+			profile: msg.Profile,
+			client:  client,
+			err:     err,
+		}
 	}
 }
 
@@ -283,6 +367,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case callFinishedMsg:
 		return m.finishCall(msg)
 
+	case panels.ProfileSelectedMsg:
+		return m, m.startConnect(msg)
+
+	case clientConnectedMsg:
+		return m.finishConnect(msg)
+
 	case spinner.TickMsg:
 		return m.tick(msg)
 	}
@@ -293,14 +383,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // handleKey handles the keys the root model owns. It reports whether the key
 // was consumed, so panel keys fall through untouched.
 func (m *Model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
-	// These work everywhere, including inside a text field being edited: ctrl+c
-	// because there must always be a way out, and send and the panel switches
-	// because filling in the last field and firing the call is the whole
-	// workflow.
-	switch {
-	case key.Matches(msg, m.keys.ForceQuit):
+	// ctrl+c comes before even the switcher: there must always be a way out.
+	if key.Matches(msg, m.keys.ForceQuit) {
 		return tea.Quit, true
+	}
 
+	// The switcher is modal. While it is open it owns every remaining key,
+	// including the panel switches — it is a choice to finish, not a place to
+	// tab out of.
+	if m.profiles.Opened() {
+		var cmd tea.Cmd
+		m.profiles, cmd = m.profiles.Update(msg)
+		return cmd, true
+	}
+
+	// These work everywhere, including inside a text field being edited: send
+	// and the panel switches, because filling in the last field and firing the
+	// call is the whole workflow.
+	switch {
 	case key.Matches(msg, m.keys.Send):
 		if m.state != stateReady {
 			return nil, true
@@ -315,14 +415,18 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 	}
 
 	// While a field is being edited every remaining key is a character, not a
-	// command — q types a q.
-	if m.request.Editing() {
+	// command — q types a q, and p types a p.
+	if m.editing() {
 		return nil, false
 	}
 
 	switch {
 	case key.Matches(msg, m.keys.Quit):
 		return tea.Quit, true
+
+	case key.Matches(msg, m.keys.Profiles):
+		m.profiles.Open()
+		return nil, true
 
 	case key.Matches(msg, m.keys.Help):
 		m.help.ShowAll = !m.help.ShowAll
@@ -342,6 +446,9 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 	return nil, false
 }
 
+// editing reports whether a text field somewhere is being typed into.
+func (m Model) editing() bool { return m.request.Editing() || m.metadata.Editing() }
+
 // send builds a request from the form and starts the call, or leaves the form
 // showing why it could not.
 //
@@ -350,6 +457,19 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 // pressing send again is asking for. Swallowing the keystroke instead would
 // look like the key had stopped working.
 func (m *Model) send() tea.Cmd {
+	// A malformed header is refused here rather than at the transport layer, so
+	// that the complaint lands on the row that caused it. The cursor is moved
+	// onto that row and the panel given focus, because a panel capped at eight
+	// lines can have the offending header scrolled out of sight.
+	if err := m.metadata.Validate(); err != nil {
+		m.metadata.FocusFirstInvalid()
+		m.focus = focusMetadata
+		m.syncFocus()
+		m.layout()
+		m.logger.Debug("refused to send with invalid headers", zap.Error(err))
+		return nil
+	}
+
 	req, ok := m.request.Submit()
 	if !ok {
 		// The form grew an error row, so the split between it and the response
@@ -369,23 +489,27 @@ func (m *Model) startCall(req panels.SendRequestMsg) tea.Cmd {
 	ctx, cancel := context.WithTimeout(m.ctx, m.callTimeout)
 	m.cancelCall = cancel
 
+	// Header names, never their values: this log outlives the session and the
+	// values are where the bearer token is.
+	md := m.metadata.Headers()
 	m.logger.Info("calling method",
 		zap.String("target", m.client.Target()),
 		zap.String("method", req.Method.FullName),
+		zap.Strings("headers", md.Keys()),
 	)
 
 	tick := m.response.SetInFlight(req.Method)
 	m.layout()
-	return tea.Batch(tick, invoke(ctx, cancel, m.client, req, m.callSeq))
+	return tea.Batch(tick, invoke(ctx, cancel, m.client, req, md, m.callSeq))
 }
 
 // invoke runs the call off the Update goroutine, decoding the response there
 // too so that the panel receives text and never a protobuf message.
-func invoke(ctx context.Context, cancel context.CancelFunc, client Invoker, req panels.SendRequestMsg, seq int) tea.Cmd {
+func invoke(ctx context.Context, cancel context.CancelFunc, client Invoker, req panels.SendRequestMsg, md grpcclient.Metadata, seq int) tea.Cmd {
 	return func() tea.Msg {
 		defer cancel()
 
-		resp, err := client.InvokeUnary(ctx, req.Method, req.Request)
+		resp, err := client.InvokeUnary(ctx, req.Method, req.Request, md)
 		if err != nil {
 			st, ok := grpcclient.StatusOf(err)
 			return callFinishedMsg{seq: seq, err: err, status: st, hasStatus: ok}
@@ -413,6 +537,104 @@ func (m Model) finishCall(msg callFinishedMsg) (tea.Model, tea.Cmd) {
 	}
 	m.layout()
 	return m, nil
+}
+
+// startConnect opens the connection a profile describes, tagged with a sequence
+// number so that a dial the user has moved on from cannot install its client.
+func (m *Model) startConnect(msg panels.ProfileSelectedMsg) tea.Cmd {
+	if m.dialer == nil {
+		m.logger.Warn("cannot switch connection: no dialer configured")
+		return nil
+	}
+
+	m.retireCall()
+	m.connSeq++
+	m.state = stateConnecting
+	m.err = nil
+	m.pendingTarget = msg.Profile.Target
+
+	m.logger.Info("connecting",
+		zap.String("profile", msg.Profile.Label()),
+		zap.String("target", msg.Profile.Target),
+		zap.String("security", msg.Profile.Security.Mode()),
+		zap.String("auth", msg.Profile.Auth.Describe()),
+	)
+	return tea.Batch(m.spinner.Tick, m.connect(msg))
+}
+
+// finishConnect installs a new client, or leaves the old connection alone and
+// says why the new one could not be opened.
+//
+// A failed dial deliberately keeps the previous client: the user still has a
+// working connection, and taking it away because a second one could not be
+// opened would turn a typo in a certificate path into a lost session.
+func (m Model) finishConnect(msg clientConnectedMsg) (tea.Model, tea.Cmd) {
+	if msg.seq != m.connSeq {
+		m.logger.Debug("dropping stale connection", zap.Int("seq", msg.seq))
+		if closer, ok := msg.client.(io.Closer); ok && msg.err == nil {
+			_ = closer.Close()
+		}
+		return m, nil
+	}
+
+	m.pendingTarget = ""
+
+	if msg.err != nil {
+		m.state = stateFailed
+		m.err = fmt.Errorf("connect to %s: %w", msg.profile.Label(), msg.err)
+		m.logger.Error("connection failed",
+			zap.String("profile", msg.profile.Label()),
+			zap.Error(msg.err),
+		)
+		return m, nil
+	}
+
+	m.closeClient()
+	m.client = msg.client
+	m.ownsClient = true
+	m.profiles.SetActive(msg.index)
+
+	// The headers belong to the connection, so switching replaces them rather
+	// than carrying the previous profile's `authorization` across to a server
+	// that never issued it.
+	m.metadata.SetHeaders(msg.profile.Metadata)
+
+	m.services = nil
+	m.tree.SetServices(nil)
+	m.request.Clear()
+	m.response.Clear()
+	m.state = stateConnecting
+	m.layout()
+
+	return m, tea.Batch(m.spinner.Tick, m.discover())
+}
+
+// Close releases the connection the model holds, if the model opened it. The
+// client [New] was given belongs to whoever passed it in.
+//
+// bubbletea has no teardown hook, so this is called on the final model that
+// Run returns.
+func (m Model) Close() error {
+	if !m.ownsClient {
+		return nil
+	}
+	if closer, ok := m.client.(io.Closer); ok {
+		return closer.Close()
+	}
+	return nil
+}
+
+// closeClient drops the connection being replaced.
+func (m *Model) closeClient() {
+	if !m.ownsClient {
+		return
+	}
+	if closer, ok := m.client.(io.Closer); ok {
+		if err := closer.Close(); err != nil {
+			m.logger.Debug("closing the previous connection", zap.Error(err))
+		}
+	}
+	m.ownsClient = false
 }
 
 // abortCall cancels the call in flight, if any. The cancellation surfaces as an
@@ -475,6 +697,9 @@ func (m Model) updatePanels(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.request, cmd = m.request.Update(msg)
 	cmds = append(cmds, cmd)
 
+	m.metadata, cmd = m.metadata.Update(msg)
+	cmds = append(cmds, cmd)
+
 	m.response, cmd = m.response.Update(msg)
 	cmds = append(cmds, cmd)
 
@@ -500,11 +725,14 @@ func (m *Model) movePanel(delta int) bool {
 func (m *Model) syncFocus() {
 	m.tree.Blur()
 	m.request.Blur()
+	m.metadata.Blur()
 	m.response.Blur()
 
 	switch m.focus {
 	case focusRequest:
 		m.request.Focus()
+	case focusMetadata:
+		m.metadata.Focus()
 	case focusResponse:
 		m.response.Focus()
 	default:
@@ -521,11 +749,16 @@ func (m Model) View() string {
 	}
 
 	var screen string
-	switch m.state {
-	case stateConnecting:
+	switch {
+	case m.profiles.Opened():
+		// The switcher covers the body rather than floating over it: lipgloss
+		// composes boxes, it does not overlay them, and a half-drawn panel
+		// behind a chooser reads as a rendering bug rather than as depth.
+		screen = m.centred(m.profiles.View())
+	case m.state == stateConnecting:
 		screen = m.centred(fmt.Sprintf("%s Connecting to %s…",
-			m.spinner.View(), m.styles.Value.Render(m.client.Target())))
-	case stateFailed:
+			m.spinner.View(), m.styles.Value.Render(m.target())))
+	case m.state == stateFailed:
 		screen = m.centred(m.errorBox())
 	default:
 		screen = m.readyView()
@@ -543,10 +776,15 @@ func (m Model) View() string {
 func (m Model) readyView() string {
 	l := m.computeLayout()
 
-	right := lipgloss.JoinVertical(lipgloss.Left,
-		m.framePanel("Request", m.request.View(), l.rightW, l.requestH, m.request.Focused()),
-		m.framePanel("Response", m.response.View(), l.rightW, l.responseH, m.response.Focused()),
-	)
+	column := []string{m.framePanel("Request", m.request.View(), l.rightW, l.requestH, m.request.Focused())}
+	if l.metadataH > 0 {
+		column = append(column,
+			m.framePanel(m.metadataTitle(), m.metadata.View(), l.rightW, l.metadataH, m.metadata.Focused()))
+	}
+	column = append(column,
+		m.framePanel("Response", m.response.View(), l.rightW, l.responseH, m.response.Focused()))
+
+	right := lipgloss.JoinVertical(lipgloss.Left, column...)
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top,
 		m.framePanel("Services", m.tree.View(), l.treeW, l.bodyH, m.tree.Focused()),
@@ -554,6 +792,16 @@ func (m Model) readyView() string {
 	)
 
 	return strings.Join([]string{body, m.statusBar(), m.help.View(m.keys)}, "\n")
+}
+
+// metadataTitle counts the headers in the panel's title, so that a collapsed or
+// scrolled panel still says how many are going out.
+func (m Model) metadataTitle() string {
+	enabled := m.metadata.Enabled()
+	if enabled == 0 {
+		return "Headers"
+	}
+	return fmt.Sprintf("Headers (%d)", enabled)
 }
 
 // framePanel draws a bordered, titled box occupying exactly width x height
@@ -601,18 +849,54 @@ func innerSize(s lipgloss.Style, width, height int) (w, h int) {
 	return max(w, 0), max(h, 0)
 }
 
+// statusBar reports what the next call would do: where it goes, how protected,
+// as whom, and with how many headers.
+//
+// It never renders a credential, only its kind. A terminal is shared over a
+// screen share more often than a config file is.
 func (m Model) statusBar() string {
 	methods := 0
 	for _, svc := range m.services {
 		methods += len(svc.Methods)
 	}
 
-	segments := []string{
-		m.styles.Value.Render(m.client.Target()),
+	segments := []string{m.styles.Value.Render(m.target())}
+
+	if profile, ok := m.profiles.Active(); ok {
+		if m.profiles.Len() > 1 {
+			segments = append(segments, m.styles.Label.Render(profile.Label()))
+		}
+		segments = append(segments, profile.Security.Mode())
+		if profile.Auth.Kind != grpcclient.AuthNone {
+			segments = append(segments, profile.Auth.Describe())
+		}
+	}
+
+	if n := m.metadata.Enabled(); n > 0 {
+		segments = append(segments, fmt.Sprintf("%d %s", n, plural(n, "header")))
+	}
+
+	segments = append(segments,
 		fmt.Sprintf("%d services", len(m.services)),
 		fmt.Sprintf("%d methods", methods),
+	)
+	return m.styles.Status.Render(styles.Truncate(strings.Join(segments, "  •  "), m.width))
+}
+
+// target is the address on screen: the one being dialled while a connection is
+// being opened, and the connected one otherwise.
+func (m Model) target() string {
+	if m.pendingTarget != "" {
+		return m.pendingTarget
 	}
-	return m.styles.Status.Render(strings.Join(segments, "  •  "))
+	return m.client.Target()
+}
+
+func plural(n int, word string) string {
+	if n == 1 {
+		return word
+	}
+	return word + "s"
 }
 
 func (m Model) errorBox() string {
@@ -649,13 +933,14 @@ func (m Model) centred(content string) string {
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
 }
 
-// layoutSizes is the geometry of one frame: a service tree down the left, the
-// request form over the response down the right.
+// layoutSizes is the geometry of one frame: a service tree down the left, and
+// down the right the request form, the headers, and the response.
 type layoutSizes struct {
 	treeW     int
 	rightW    int
 	bodyH     int
 	requestH  int
+	metadataH int
 	responseH int
 }
 
@@ -671,8 +956,13 @@ func (m *Model) layout() {
 	w, h = innerSize(m.styles.Panel, l.rightW, l.requestH)
 	m.request.SetSize(w, h)
 
+	w, h = innerSize(m.styles.Panel, l.rightW, l.metadataH)
+	m.metadata.SetSize(w, h)
+
 	w, h = innerSize(m.styles.Panel, l.rightW, l.responseH)
 	m.response.SetSize(w, h)
+
+	m.profiles.SetSize(m.width, m.height)
 }
 
 func (m Model) computeLayout() layoutSizes {
@@ -690,10 +980,18 @@ func (m Model) computeLayout() layoutSizes {
 	// The status bar takes one row; the help bar takes however many it needs.
 	l.bodyH = max(m.height-1-m.helpHeight(), minPanelHeight)
 
-	// The form gets the height it asks for and the response takes the rest: a
-	// three-field request should not reserve half the screen.
+	// Each of the top two panels gets the height it asks for and the response
+	// takes the rest: a three-field request with one header should not reserve
+	// half the screen between them.
 	chrome := m.styles.Panel.GetVerticalBorderSize() + m.styles.Panel.GetVerticalPadding() + 1
-	l.requestH, l.responseH = splitHeight(l.bodyH, m.request.ContentHeight()+chrome, minPanelHeight)
+
+	metadataWant := 0
+	if m.metadata.Visible() {
+		metadataWant = m.metadata.ContentHeight() + chrome
+	}
+
+	l.requestH, l.metadataH, l.responseH = splitColumn(l.bodyH,
+		m.request.ContentHeight()+chrome, metadataWant, minPanelHeight)
 	return l
 }
 
@@ -711,10 +1009,10 @@ func (m Model) helpHeight() int {
 // terminal width, and `?`.
 func (m *Model) measureHelp() { m.helpH = lipgloss.Height(m.help.View(m.keys)) }
 
-// splitHeight divides the right-hand column, giving the top panel the height it
-// wants within what is left after the bottom one's minimum. A column too short
-// to satisfy both minimums is halved instead, because a panel of zero rows
-// renders as a broken box rather than as nothing.
+// splitHeight divides a column in two, giving the top panel the height it wants
+// within what is left after the bottom one's minimum. A column too short to
+// satisfy both minimums is halved instead, because a panel of zero rows renders
+// as a broken box rather than as nothing.
 func splitHeight(total, want, minEach int) (top, bottom int) {
 	if total < 2*minEach {
 		top = total / 2
@@ -722,4 +1020,32 @@ func splitHeight(total, want, minEach int) (top, bottom int) {
 	}
 	top = min(max(want, minEach), total-minEach)
 	return top, total - top
+}
+
+// splitColumn divides the right-hand column three ways: the form and the
+// headers each get what they ask for, and the response takes the rest.
+//
+// The headers are settled first and against the *whole* column, so that a form
+// tall enough to fill the screen cannot squeeze them out — a header list is
+// small, bounded, and the thing you are most likely to be changing when a call
+// keeps coming back Unauthenticated.
+func splitColumn(total, wantTop, wantMiddle, minEach int) (top, middle, bottom int) {
+	// A middle panel that wants nothing is not on screen, and the column is the
+	// two-panel one it has always been.
+	if wantMiddle <= 0 {
+		top, bottom = splitHeight(total, wantTop, minEach)
+		return top, 0, bottom
+	}
+
+	if total < 3*minEach {
+		// Too short for three panels at their minimum. Thirds keep all three
+		// visible, which beats one of them rendering as a broken box.
+		top = total / 3
+		middle = total / 3
+		return top, middle, total - top - middle
+	}
+
+	middle = min(max(wantMiddle, minEach), total-2*minEach)
+	top, bottom = splitHeight(total-middle, wantTop, minEach)
+	return top, middle, bottom
 }
