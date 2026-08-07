@@ -44,7 +44,8 @@ func DefaultPath() string {
 	return filepath.Join(dir, "grpctui", "config.yaml")
 }
 
-// Load reads the config file at the default path.
+// Load reads the config file at path, which the caller has not been asked for
+// by name — in practice [DefaultPath].
 //
 // A missing file yields the zero Config and no error: the default path is a
 // suggestion, not a requirement. A file that exists but cannot be read or
