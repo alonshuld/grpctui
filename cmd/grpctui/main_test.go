@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/alonshuld/grpctui/internal/ui"
 	"github.com/alonshuld/grpctui/internal/version"
 )
 
@@ -128,6 +129,7 @@ func TestParseFlags_Defaults(t *testing.T) {
 	assert.Equal(t, "localhost:50051", opts.target)
 	assert.Equal(t, "error", opts.logLevel, "a normal run must be near-silent")
 	assert.NotEmpty(t, opts.logFile)
+	assert.Equal(t, ui.DefaultCallTimeout, opts.callTimeout)
 }
 
 func TestParseFlags_Overrides(t *testing.T) {
@@ -137,6 +139,7 @@ func TestParseFlags_Overrides(t *testing.T) {
 	opts, err := parseFlags([]string{
 		"--log-file", logFile,
 		"--log-level", "debug",
+		"--call-timeout", "5s",
 		"example.com:443",
 	}, &stderr)
 
@@ -144,6 +147,8 @@ func TestParseFlags_Overrides(t *testing.T) {
 	assert.Equal(t, "example.com:443", opts.target)
 	assert.Equal(t, logFile, opts.logFile)
 	assert.Equal(t, "debug", opts.logLevel)
+	assert.Equal(t, 5*time.Second, opts.callTimeout,
+		"a service slower than the default needs this reachable without a rebuild")
 }
 
 // An empty --log-file disables logging rather than falling back to a console

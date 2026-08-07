@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"go.uber.org/zap"
@@ -42,6 +43,7 @@ type options struct {
 
 	logFile     string
 	logLevel    string
+	callTimeout time.Duration
 	showVersion bool
 
 	// usage prints the flag set's help. The target may come from the config
@@ -123,7 +125,11 @@ func start(opts options, logger *zap.Logger, out io.Writer) error {
 		zap.String("version", version.Version()),
 	)
 
-	model := ui.New(client, ui.WithLogger(logger), ui.WithContext(ctx))
+	model := ui.New(client,
+		ui.WithLogger(logger),
+		ui.WithContext(ctx),
+		ui.WithCallTimeout(opts.callTimeout),
+	)
 	program := tea.NewProgram(model,
 		tea.WithContext(ctx),
 		tea.WithOutput(out),
@@ -147,6 +153,8 @@ func parseFlags(args []string, stderr io.Writer) (options, error) {
 		"write logs to this file; empty disables logging")
 	fs.StringVar(&opts.logLevel, "log-level", "error",
 		"log level: debug, info, warn, error")
+	fs.DurationVar(&opts.callTimeout, "call-timeout", ui.DefaultCallTimeout,
+		"give up on a single call after this long")
 	fs.BoolVar(&opts.showVersion, "version", false, "print the version and exit")
 
 	fs.Usage = func() {
