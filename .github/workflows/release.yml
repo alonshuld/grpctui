@@ -5,6 +5,22 @@ on:
   push:
     tags: ["v*"]
 
+  # Publishing a tag whose push never reached a runner would otherwise be
+  # impossible: tags are immutable, so it cannot be re-pushed to fire the
+  # trigger again, and there is no failed run to re-run. This is the way back —
+  # it releases a tag that already exists and never creates one.
+  #
+  # Dispatch it from the default branch, not from the tag: GitHub reads the
+  # workflow definition from the ref it is dispatched against, and a tag cut
+  # before this trigger existed does not carry it. The `tag` input is what
+  # decides which commit is actually built.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to release, e.g. v0.2.0"
+        required: true
+        type: string
+
 permissions:
   contents: write
 
@@ -17,6 +33,9 @@ jobs:
         with:
           # GoReleaser builds the changelog from commits since the last tag.
           fetch-depth: 0
+          # On a tag push this is already the tag; on a dispatch it is the
+          # default branch, and the tag under release has to be asked for.
+          ref: ${{ inputs.tag || github.ref }}
 
       - uses: actions/setup-go@v7
         with:
@@ -41,3 +60,8 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Checking out a tag leaves the repository on a detached head that
+          # `git describe` resolves correctly, but naming the tag outright means
+          # a dispatched release cannot quietly build the wrong one. Empty on a
+          # tag push, where GoReleaser reads it from the ref.
+          GORELEASER_CURRENT_TAG: ${{ inputs.tag }}

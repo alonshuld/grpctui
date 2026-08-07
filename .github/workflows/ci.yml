@@ -49,6 +49,14 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+      # go.mod drift is invisible to every other gate here: `go get` adds a
+      # requirement without revising its `// indirect` marker, and the build,
+      # the linters and the whole test matrix are all perfectly happy with a
+      # stale one. A released go.mod is cached immutably, so it is worth
+      # catching before a tag rather than after.
+      - name: go mod tidy is clean
+        run: go mod tidy -diff
+
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
