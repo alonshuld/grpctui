@@ -67,8 +67,12 @@ target: localhost:50051
 ```
 
 A target argument always beats the file, so `grpctui other.example:443` still
-does what it says. A missing file is fine; an unknown key is an error, so a
-typo is never silently ignored.
+does what it says.
+
+Nothing about the file is guessed at. The default path may be absent — that is
+the zero-config case — but a path you name with `--config` has to exist, and an
+unknown key is an error. A typo is never silently ignored, whether it is in the
+filename or inside the file.
 
 ## Request fields
 

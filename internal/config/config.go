@@ -44,19 +44,35 @@ func DefaultPath() string {
 	return filepath.Join(dir, "grpctui", "config.yaml")
 }
 
-// Load reads the config file at path.
+// Load reads the config file at the default path.
 //
 // A missing file yields the zero Config and no error: the default path is a
 // suggestion, not a requirement. A file that exists but cannot be read or
 // parsed is an error, because the user meant something by it.
 func Load(path string) (Config, error) {
+	return read(path, false)
+}
+
+// LoadFile reads a config file the user named on the command line. Every
+// failure is an error, a missing file included: they asked for that path by
+// name, and quietly starting up without it turns a typo into a mystery.
+//
+// The distinction is not cosmetic. "Missing is fine" applied to an explicit
+// path is also what let `--config` accept a path that could not exist and carry
+// on into the TUI — a shrug on one platform and an error on another, depending
+// on whether the OS distinguishes ENOTDIR from ENOENT.
+func LoadFile(path string) (Config, error) {
+	return read(path, true)
+}
+
+func read(path string, mustExist bool) (Config, error) {
 	if path == "" {
 		return Config{}, nil
 	}
 
 	f, err := os.Open(path) // #nosec G304 -- the path is the user's own config file, from --config or the XDG default.
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
+		if errors.Is(err, fs.ErrNotExist) && !mustExist {
 			return Config{}, nil
 		}
 		return Config{}, fmt.Errorf("open config %q: %w", path, err)
