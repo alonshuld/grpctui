@@ -60,6 +60,23 @@ func TestLoad_MissingFileIsNotAnError(t *testing.T) {
 	assert.Empty(t, cfg.Target)
 }
 
+// Load shrugs at a missing file, and only at a missing file. A path that is
+// there but cannot be read is the user having meant something grpctui could not
+// do; starting up with no target instead turns that into a mystery.
+//
+// The unreadable path here is a directory, which exists on every platform
+// grpctui builds for and cannot be decoded as YAML on any of them. A path whose
+// parent is a regular file would be neater, but Windows reports that as
+// fs.ErrNotExist and the test would assert the opposite of what it means.
+func TestLoad_UnreadablePathIsAnError(t *testing.T) {
+	dir := t.TempDir()
+
+	_, err := config.Load(dir)
+
+	require.Error(t, err, "a config path that exists but cannot be read was ignored")
+	assert.Contains(t, err.Error(), dir, "the error must name the path it failed on")
+}
+
 func TestLoad_EmptyPath(t *testing.T) {
 	cfg, err := config.Load("")
 

@@ -38,7 +38,7 @@ func TestNewForm(t *testing.T) {
 		assert.Equal(t, []string{
 			"text", "flag", "count", "total", "port", "size", "delta", "offset",
 			"ratio", "weight", "payload", "colour", "nested", "tags", "labels",
-			"by_name", "by_id", "note", "retry_count",
+			"by_name", "by_id", "note", "retry_count", "verbose",
 		}, names)
 	})
 
@@ -114,7 +114,7 @@ func TestNewForm(t *testing.T) {
 	})
 
 	t.Run("counts editable fields", func(t *testing.T) {
-		assert.Equal(t, 14, form.EditableCount())
+		assert.Equal(t, 15, form.EditableCount())
 	})
 }
 

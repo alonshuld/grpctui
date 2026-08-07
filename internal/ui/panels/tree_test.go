@@ -72,6 +72,14 @@ func keyMsg(k string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyEsc}
 	case "backspace":
 		return tea.KeyMsg{Type: tea.KeyBackspace}
+	case "ctrl+u":
+		return tea.KeyMsg{Type: tea.KeyCtrlU}
+	case "ctrl+d":
+		return tea.KeyMsg{Type: tea.KeyCtrlD}
+	case "shift+left":
+		return tea.KeyMsg{Type: tea.KeyShiftLeft}
+	case "shift+right":
+		return tea.KeyMsg{Type: tea.KeyShiftRight}
 	default:
 		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}
 	}
@@ -243,4 +251,24 @@ func TestTree_TruncatesLongRows(t *testing.T) {
 		assert.LessOrEqual(t, len([]rune(line)), 12, "line overflows the panel: %q", line)
 	}
 	assert.Contains(t, tree.View(), "…")
+}
+
+// ctrl+d and ctrl+u move by a screenful, keeping one row of overlap so the
+// cursor lands somewhere the user was just looking at.
+func TestTree_PagesThroughTheList(t *testing.T) {
+	tree := newTree(t)
+	tree.SetSize(40, 3) // three of the five rows fit
+
+	tree, _ = press(t, tree, "ctrl+d")
+	assert.Contains(t, tree.View(), "❯    SayHelloStream", "a page down should land two rows on")
+
+	tree, _ = press(t, tree, "ctrl+d")
+	assert.Contains(t, tree.View(), "❯    Echo", "a second page down should reach the last row")
+
+	// And the bottom is a wall, not a wrap.
+	tree, _ = press(t, tree, "ctrl+d")
+	assert.Contains(t, tree.View(), "❯    Echo")
+
+	tree, _ = press(t, tree, "ctrl+u", "ctrl+u", "ctrl+u")
+	assert.Contains(t, tree.View(), "❯ ▾ demo.v1.Greeter", "paging up should stop at the top")
 }

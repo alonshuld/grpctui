@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/alonshuld/grpctui/internal/grpcclient"
+	"github.com/alonshuld/grpctui/internal/protoschema"
 )
 
 // servicesDiscoveredMsg carries the result of a successful reflection sweep.
@@ -25,8 +26,10 @@ type callFinishedMsg struct {
 	// one belongs to a call the user has moved on from and is dropped.
 	seq int
 
-	// body is the response rendered as JSON, set only on success.
-	body string
+	// body is the rendered response, set only on success, and format says how it
+	// was rendered — JSON unless the message left no other option.
+	body   string
+	format protoschema.Format
 
 	// err is the call's failure, if any. status and hasStatus carry its gRPC
 	// status, when it had one — a request that never reached the wire does not.

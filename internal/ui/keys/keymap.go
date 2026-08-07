@@ -21,6 +21,14 @@ type KeyMap struct {
 	Top      key.Binding
 	Bottom   key.Binding
 
+	// ScrollLeft and ScrollRight pan a panel whose content is wider than it is —
+	// a JSON response holding a URL or a stack trace, in practice. Without them
+	// the viewport truncates such a line and there is no keystroke that reveals
+	// the rest. They are deliberately not h/l, which mean expand/collapse
+	// everywhere else in grpctui.
+	ScrollLeft  key.Binding
+	ScrollRight key.Binding
+
 	Select   key.Binding
 	Expand   key.Binding
 	Collapse key.Binding
@@ -69,6 +77,14 @@ func Default() KeyMap {
 		Bottom: key.NewBinding(
 			key.WithKeys("end", "G"),
 			key.WithHelp("G", "bottom"),
+		),
+		ScrollLeft: key.NewBinding(
+			key.WithKeys("shift+left", "H"),
+			key.WithHelp("H", "scroll left"),
+		),
+		ScrollRight: key.NewBinding(
+			key.WithKeys("shift+right", "L"),
+			key.WithHelp("L", "scroll right"),
 		),
 		Select: key.NewBinding(
 			key.WithKeys("enter"),
@@ -131,7 +147,10 @@ func (k KeyMap) ShortHelp() []key.Binding {
 func (k KeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.PageUp, k.PageDown, k.Top, k.Bottom},
-		{k.Select, k.Expand, k.Collapse, k.Toggle},
+		// Horizontal scrolling shares a column with expand/collapse rather than
+		// taking one of its own: a sixth column pushes the bar past 100 cells,
+		// where it gets truncated and the last one disappears entirely.
+		{k.Select, k.Expand, k.Collapse, k.Toggle, k.ScrollLeft, k.ScrollRight},
 		{k.Send, k.Cancel},
 		{k.NextPanel, k.PrevPanel},
 		{k.Retry, k.Help, k.Quit},

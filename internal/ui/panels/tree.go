@@ -9,7 +9,6 @@ import (
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 
 	"github.com/alonshuld/grpctui/internal/grpcclient"
 	"github.com/alonshuld/grpctui/internal/ui/keys"
@@ -181,14 +180,14 @@ func (t Tree) renderRow(i int) string {
 	// The cursor gets a gutter glyph as well as a highlight: colour alone
 	// would leave it invisible on a monochrome terminal — and in golden files.
 	if i != t.cursor {
-		return truncate("  "+text, t.width)
+		return styles.Truncate("  "+text, t.width)
 	}
 
 	cursorStyle := t.styles.Cursor
 	if !t.focused {
 		cursorStyle = t.styles.CursorUnfocused
 	}
-	return cursorStyle.Render(truncate("❯ "+text, t.width))
+	return cursorStyle.Render(styles.Truncate("❯ "+text, t.width))
 }
 
 // streamTag labels a method's streaming shape; unary methods get no tag, since
@@ -230,37 +229,14 @@ func (t Tree) currentRow() (row, bool) {
 func (t *Tree) moveCursor(delta int) { t.moveTo(t.cursor + delta) }
 
 func (t *Tree) moveTo(i int) {
-	switch {
-	case len(t.rows) == 0:
-		t.cursor = 0
-	case i < 0:
-		t.cursor = 0
-	case i >= len(t.rows):
-		t.cursor = len(t.rows) - 1
-	default:
-		t.cursor = i
-	}
+	t.cursor = clampIndex(i, len(t.rows))
 	t.clampOffset()
 }
 
 // clampOffset scrolls the viewport just far enough to keep the cursor visible.
+// A tree row is exactly one line, so the cursor's index is its line.
 func (t *Tree) clampOffset() {
-	if t.height <= 0 {
-		t.offset = 0
-		return
-	}
-	if t.cursor < t.offset {
-		t.offset = t.cursor
-	}
-	if t.cursor >= t.offset+t.height {
-		t.offset = t.cursor - t.height + 1
-	}
-	if maxOffset := len(t.rows) - t.height; t.offset > maxOffset {
-		t.offset = maxOffset
-	}
-	if t.offset < 0 {
-		t.offset = 0
-	}
+	t.offset = clampWindow(t.cursor, t.offset, t.height, len(t.rows))
 }
 
 func (t Tree) pageSize() int {
@@ -322,15 +298,4 @@ func (t *Tree) selectCurrent() tea.Cmd {
 	svc := t.services[r.service]
 	selected := MethodSelectedMsg{Service: svc, Method: svc.Methods[r.method]}
 	return func() tea.Msg { return selected }
-}
-
-// truncate cuts a rendered string to width, accounting for ANSI sequences.
-func truncate(s string, width int) string {
-	if width <= 0 || lipgloss.Width(s) <= width {
-		return s
-	}
-	if width == 1 {
-		return "…"
-	}
-	return lipgloss.NewStyle().MaxWidth(width-1).Render(s) + "…"
 }

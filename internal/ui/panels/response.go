@@ -1,7 +1,6 @@
 package panels
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
@@ -11,6 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/alonshuld/grpctui/internal/grpcclient"
+	"github.com/alonshuld/grpctui/internal/protoschema"
 	"github.com/alonshuld/grpctui/internal/ui/keys"
 	"github.com/alonshuld/grpctui/internal/ui/styles"
 )
@@ -47,6 +47,7 @@ type Response struct {
 	// body is the text under the status line, held unwrapped so that a resize
 	// can lay it out again.
 	body     string
+	format   protoschema.Format
 	duration time.Duration
 
 	width   int
@@ -54,10 +55,16 @@ type Response struct {
 	focused bool
 }
 
+// horizontalStep is how far one scroll-left/right keystroke pans the body. It
+// is a few columns rather than one so that panning a wide line is a couple of
+// keystrokes instead of a couple of dozen.
+const horizontalStep = 8
+
 // NewResponse builds an empty response panel.
 func NewResponse(km keys.KeyMap, st styles.Styles) Response {
 	vp := viewport.New(0, 0)
 	vp.KeyMap = viewportKeys(km)
+	vp.SetHorizontalStep(horizontalStep)
 
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
@@ -74,12 +81,18 @@ func NewResponse(km keys.KeyMap, st styles.Styles) Response {
 // l — bound to something other than the expand/collapse they mean everywhere
 // else. Bindings with no grpctui equivalent are left disabled rather than
 // silently keeping their defaults.
+//
+// Left and Right must be bound to something: the viewport truncates any line
+// wider than it is, so without them the tail of a long JSON line is not merely
+// off screen but unreachable.
 func viewportKeys(km keys.KeyMap) viewport.KeyMap {
 	return viewport.KeyMap{
 		Up:       km.Up,
 		Down:     km.Down,
 		PageUp:   km.PageUp,
 		PageDown: km.PageDown,
+		Left:     km.ScrollLeft,
+		Right:    km.ScrollRight,
 	}
 }
 
@@ -94,11 +107,13 @@ func (r *Response) SetMethod(m grpcclient.Method) {
 func (r *Response) Clear() {
 	r.state = responseEmpty
 	r.body = ""
+	r.format = protoschema.FormatJSON
 	r.status = grpcclient.CallStatus{}
 	r.hasCode = false
 	r.duration = 0
 	r.viewport.SetContent("")
 	r.viewport.GotoTop()
+	r.viewport.SetXOffset(0)
 }
 
 // SetInFlight moves the panel into its loading state and returns the command
@@ -113,11 +128,15 @@ func (r *Response) SetInFlight(m grpcclient.Method) tea.Cmd {
 // InFlight reports whether a call is running.
 func (r Response) InFlight() bool { return r.state == responseInFlight }
 
-// SetSuccess shows a decoded response body.
-func (r *Response) SetSuccess(body string, took time.Duration) {
+// SetSuccess shows a decoded response body. format is how that body was
+// rendered: anything but [protoschema.FormatJSON] is called out on the status
+// line, because a user who asked for JSON and got something else is owed an
+// explanation rather than left to wonder.
+func (r *Response) SetSuccess(body string, format protoschema.Format, took time.Duration) {
 	r.Clear()
 	r.state = responseOK
 	r.body = body
+	r.format = format
 	r.duration = took
 	r.setBody()
 	r.viewport.GotoTop()
@@ -135,8 +154,13 @@ func (r *Response) SetFailure(message string, status grpcclient.CallStatus, hasS
 
 	// With a status it is the server's message that belongs on screen; without
 	// one the call never reached the wire, and the raw error is all there is.
+	//
+	// A status may carry no message at all — grpc-go lets a server raise a bare
+	// code — and then the raw error is again the only text there is. Preferring
+	// an empty status message over it would leave the panel showing a code above
+	// a blank body.
 	r.body = message
-	if hasStatus {
+	if hasStatus && status.Message != "" {
 		r.body = status.Message
 	}
 	r.setBody()
@@ -151,7 +175,7 @@ func (r *Response) SetFailure(message string, status grpcclient.CallStatus, hasS
 // silently truncates whatever now runs past the edge.
 func (r *Response) setBody() {
 	if r.state == responseFailed {
-		r.viewport.SetContent(wrapText(r.body, r.viewport.Width))
+		r.viewport.SetContent(styles.Wrap(r.body, r.viewport.Width))
 		return
 	}
 	r.viewport.SetContent(r.body)
@@ -227,13 +251,15 @@ func (r Response) emptyView() string {
 func (r Response) statusLine() string {
 	switch {
 	case r.state == responseOK:
-		took := r.styles.Muted.Render(formatDuration(r.duration))
-		return truncate(r.styles.StatusOK.Render("OK")+"  "+took, r.width)
+		line := r.styles.StatusOK.Render("OK") + "  " + r.styles.Muted.Render(formatDuration(r.duration))
+		if r.format != protoschema.FormatJSON {
+			line += "  " + r.styles.Muted.Render("· protobuf text (unknown Any type)")
+		}
+		return styles.Truncate(line, r.width)
 	case r.hasCode:
-		code := fmt.Sprintf("%s (%d)", r.status.Name, r.status.Code)
-		return truncate(r.styles.StatusError.Render(code), r.width)
+		return styles.Truncate(r.styles.StatusError.Render(r.status.CodeName()), r.width)
 	default:
-		return truncate(r.styles.StatusError.Render("Call failed"), r.width)
+		return styles.Truncate(r.styles.StatusError.Render("Call failed"), r.width)
 	}
 }
 
@@ -247,12 +273,4 @@ func formatDuration(d time.Duration) string {
 	default:
 		return d.Round(time.Microsecond).String()
 	}
-}
-
-// wrapText hard-wraps text to width on whitespace.
-func wrapText(s string, width int) string {
-	if width <= 0 {
-		return s
-	}
-	return lipgloss.NewStyle().Width(width).Render(s)
 }

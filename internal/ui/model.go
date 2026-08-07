@@ -154,6 +154,11 @@ type Model struct {
 	width  int
 	height int
 
+	// helpH is the height of the help bar, measured whenever it can have
+	// changed rather than on every frame: measuring means rendering the whole
+	// bar, and computeLayout runs twice per keystroke purely for this number.
+	helpH int
+
 	discoveryTimeout time.Duration
 	callTimeout      time.Duration
 }
@@ -221,6 +226,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.help.Width = msg.Width
+		m.measureHelp()
 		m.layout()
 		return m, nil
 
@@ -253,6 +259,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case panels.MethodSelectedMsg:
+		// A call still in flight was made against the method the user has just
+		// left, so it is cancelled and its sequence number retired. Without
+		// that, its answer arrives after the panels have moved on and is drawn
+		// under the new method's name as if it belonged to it — and, since the
+		// panel is no longer in its in-flight state, esc has stopped being able
+		// to cancel it.
+		m.retireCall()
+
 		// Focus deliberately stays on the tree: selecting builds the request
 		// form but does not move the user into it, so j/k keep walking the
 		// method list. Tab is how you enter the form — the same way lazygit and
@@ -312,6 +326,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 
 	case key.Matches(msg, m.keys.Help):
 		m.help.ShowAll = !m.help.ShowAll
+		m.measureHelp()
 		m.layout()
 		return nil, true
 
@@ -376,11 +391,11 @@ func invoke(ctx context.Context, cancel context.CancelFunc, client Invoker, req 
 			return callFinishedMsg{seq: seq, err: err, status: st, hasStatus: ok}
 		}
 
-		body, err := protoschema.MarshalJSON(resp.Message)
+		body, format, err := protoschema.Marshal(resp.Message)
 		if err != nil {
 			return callFinishedMsg{seq: seq, err: err, duration: resp.Duration}
 		}
-		return callFinishedMsg{seq: seq, body: body, duration: resp.Duration}
+		return callFinishedMsg{seq: seq, body: body, format: format, duration: resp.Duration}
 	}
 }
 
@@ -394,7 +409,7 @@ func (m Model) finishCall(msg callFinishedMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
 		m.response.SetFailure(msg.err.Error(), msg.status, msg.hasStatus, msg.duration)
 	} else {
-		m.response.SetSuccess(msg.body, msg.duration)
+		m.response.SetSuccess(msg.body, msg.format, msg.duration)
 	}
 	m.layout()
 	return m, nil
@@ -408,6 +423,23 @@ func (m *Model) abortCall() {
 	}
 	m.cancelCall()
 	m.cancelCall = nil
+}
+
+// retireCall abandons the call in flight, if any: it is cancelled and its
+// sequence number bumped, so the answer already on its way is dropped rather
+// than shown.
+//
+// That is the difference from [Model.abortCall], which the user presses esc for
+// and which is meant to put "Canceled" on screen. Here there is nothing left to
+// put it under.
+func (m *Model) retireCall() {
+	if m.cancelCall == nil {
+		return
+	}
+	retired := m.callSeq
+	m.abortCall()
+	m.callSeq++
+	m.logger.Debug("abandoned an in-flight call", zap.Int("seq", retired))
 }
 
 // tick feeds a spinner tick to whichever spinner it belongs to. Each
@@ -482,21 +514,30 @@ func (m *Model) syncFocus() {
 
 // View renders the whole screen.
 func (m Model) View() string {
-	if m.width == 0 || m.height == 0 {
+	if m.width <= 0 || m.height <= 0 {
 		// No WindowSizeMsg yet: bubbletea sends one immediately, so this frame
 		// is never actually seen.
 		return ""
 	}
 
+	var screen string
 	switch m.state {
 	case stateConnecting:
-		return m.centred(fmt.Sprintf("%s Connecting to %s…",
+		screen = m.centred(fmt.Sprintf("%s Connecting to %s…",
 			m.spinner.View(), m.styles.Value.Render(m.client.Target())))
 	case stateFailed:
-		return m.centred(m.errorBox())
+		screen = m.centred(m.errorBox())
 	default:
-		return m.readyView()
+		screen = m.readyView()
 	}
+
+	// The last word on how big a frame may be. Panels have minimum heights that
+	// a 20x4 terminal cannot satisfy at all, so on a small enough window the
+	// layout arithmetic necessarily asks for more rows than exist; a frame
+	// larger than the terminal scrolls the screen and strands the previous one
+	// above it. Clamping here means every screen — not just the ready one — is
+	// bounded, whatever the layout wanted.
+	return styles.Clamp(screen, m.width, m.height)
 }
 
 func (m Model) readyView() string {
@@ -532,12 +573,19 @@ func (m Model) framePanel(title, body string, width, height int, focused bool) s
 		titleLine = m.styles.Muted.Render(title)
 	}
 
+	// lipgloss reads MaxHeight(0) as "no maximum", so a panel with no room left
+	// for a body cannot be told to truncate one — it has to be given nothing to
+	// draw instead, or the body runs straight through the border below it.
 	innerW, innerH := innerSize(style, width, height)
-	body = lipgloss.NewStyle().
-		Width(innerW).
-		Height(innerH).
-		MaxHeight(innerH).
-		Render(body)
+	if innerH <= 0 {
+		body = ""
+	} else {
+		body = lipgloss.NewStyle().
+			Width(innerW).
+			Height(innerH).
+			MaxHeight(innerH).
+			Render(body)
+	}
 
 	return style.
 		Width(max(width-style.GetHorizontalBorderSize(), 0)).
@@ -579,7 +627,7 @@ func (m Model) errorBox() string {
 	lines := []string{
 		m.styles.ErrorTitle.Render(title),
 		"",
-		m.styles.ErrorBody.Render(wrap(m.err.Error(), m.errorWidth())),
+		m.styles.ErrorBody.Render(styles.Wrap(m.err.Error(), m.errorWidth())),
 		"",
 		m.styles.Hint.Render(hint),
 		"",
@@ -640,7 +688,7 @@ func (m Model) computeLayout() layoutSizes {
 	l.rightW = m.width - l.treeW
 
 	// The status bar takes one row; the help bar takes however many it needs.
-	l.bodyH = max(m.height-1-lipgloss.Height(m.help.View(m.keys)), minPanelHeight)
+	l.bodyH = max(m.height-1-m.helpHeight(), minPanelHeight)
 
 	// The form gets the height it asks for and the response takes the rest: a
 	// three-field request should not reserve half the screen.
@@ -648,6 +696,20 @@ func (m Model) computeLayout() layoutSizes {
 	l.requestH, l.responseH = splitHeight(l.bodyH, m.request.ContentHeight()+chrome, minPanelHeight)
 	return l
 }
+
+// helpHeight reports how many rows the help bar occupies, from the cached
+// measurement. It falls back to measuring so that a Model nobody has sized —
+// one built straight from [New] in a test — still lays out correctly.
+func (m Model) helpHeight() int {
+	if m.helpH > 0 {
+		return m.helpH
+	}
+	return lipgloss.Height(m.help.View(m.keys))
+}
+
+// measureHelp re-measures the help bar. Only two things change its height: the
+// terminal width, and `?`.
+func (m *Model) measureHelp() { m.helpH = lipgloss.Height(m.help.View(m.keys)) }
 
 // splitHeight divides the right-hand column, giving the top panel the height it
 // wants within what is left after the bottom one's minimum. A column too short
@@ -660,12 +722,4 @@ func splitHeight(total, want, minEach int) (top, bottom int) {
 	}
 	top = min(max(want, minEach), total-minEach)
 	return top, total - top
-}
-
-// wrap hard-wraps text to width on whitespace.
-func wrap(s string, width int) string {
-	if width <= 0 {
-		return s
-	}
-	return lipgloss.NewStyle().Width(width).Render(s)
 }
