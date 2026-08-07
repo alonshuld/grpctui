@@ -1,0 +1,24 @@
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                    ╭─────────────────────────────────────────────────────────╮                     
+                    │ Connections                                             │                     
+                    │                                                         │                     
+                    │ ❯ ● local    localhost:50051 · plaintext · 2 headers    │                     
+                    │     staging  api.staging.example.com:443 · TLS · bearer │                     
+                    │     prod     api.example.com:443 · mTLS · basic (alice) │                     
+                    │                                                         │                     
+                    │ enter connect · esc close                               │                     
+                    ╰─────────────────────────────────────────────────────────╯                     
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    

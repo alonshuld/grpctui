@@ -93,8 +93,18 @@ func (m Method) Kind() Kind {
 // is cancelled. Errors from the target keep their gRPC status, so
 // [status.FromError] still works on the returned error; a target without
 // reflection yields an error matching [ErrReflectionUnavailable].
-func (c *Client) ListServices(ctx context.Context) ([]Service, error) {
+//
+// md rides along on the reflection stream. Discovery is an RPC like any other,
+// so a server that gates its API behind a header gates reflection behind the
+// same one — a target that answers grpcurl but not grpctui is nearly always
+// this.
+func (c *Client) ListServices(ctx context.Context, md Metadata) ([]Service, error) {
 	start := time.Now()
+
+	ctx, err := md.attach(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list services: %w", err)
+	}
 
 	// grpcreflect binds a context (and one reflection stream) per client, so
 	// this is constructed per call rather than cached on c.

@@ -18,14 +18,20 @@ import (
 // it turns up in a log record, a payload was logged.
 const secretPayload = "s3cr3t-payload-value"
 
+// secretCredential is a value that exists nowhere but inside a credential. If
+// it turns up in a log record, a token was logged.
+const secretCredential = "s3cr3t-bearer-token"
+
 // observed dials the test server with a logger that records everything.
-func observed(t *testing.T, ts *testServer) (*grpcclient.Client, *observer.ObservedLogs) {
+func observed(t *testing.T, ts *testServer, opts ...grpcclient.DialOption) (*grpcclient.Client, *observer.ObservedLogs) {
 	t.Helper()
 
 	core, logs := observer.New(zapcore.DebugLevel)
-	c, err := grpcclient.Dial(bufTarget,
+	opts = append(opts,
 		grpcclient.WithGRPCDialOptions(ts.dialer()),
 		grpcclient.WithLogger(zap.New(core)))
+
+	c, err := grpcclient.Dial(bufTarget, opts...)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = c.Close() })
 
@@ -55,12 +61,12 @@ func TestClient_NeverLogsPayloads(t *testing.T) {
 	// The success path first, because it is the one that logs about the bodies
 	// — and the payload it carries is the secret, so an entry that renders the
 	// request rather than measuring it fails here.
-	_, err := c.InvokeUnary(context.Background(), method, checkRequest(t, method, secretPayload))
+	_, err := c.InvokeUnary(context.Background(), method, checkRequest(t, method, secretPayload), nil)
 	require.NoError(t, err)
 
 	// Then a service nobody registered, so the call fails: the path that logs
 	// zap.Error, where an echoed request value would most plausibly leak.
-	_, err = c.InvokeUnary(context.Background(), method, checkRequest(t, method, secretPayload+"-absent"))
+	_, err = c.InvokeUnary(context.Background(), method, checkRequest(t, method, secretPayload+"-absent"), nil)
 	require.Error(t, err)
 
 	records := logs.All()
@@ -78,4 +84,58 @@ func TestClient_NeverLogsPayloads(t *testing.T) {
 	assert.Contains(t, fields, "response_bytes")
 	assert.NotContains(t, fields, "request", "sizes, not contents")
 	assert.NotContains(t, fields, "response")
+}
+
+// The same standing decision applied to credentials: a bearer token and a
+// header value are the two things in a session most worth not writing to a file
+// that outlives it. Header *names* are fair game and genuinely useful.
+func TestClient_NeverLogsCredentials(t *testing.T) {
+	ts := startTestServer(t)
+	c, logs := observed(t, ts, grpcclient.WithAuth(grpcclient.Auth{
+		Kind:  grpcclient.AuthBearer,
+		Token: secretCredential,
+	}))
+
+	method := healthMethod(t, c, "Check")
+	md := grpcclient.Metadata{{Key: "x-api-key", Value: secretCredential}}
+
+	_, err := c.InvokeUnary(context.Background(), method, checkRequest(t, method, ""), md)
+	require.NoError(t, err)
+
+	records := logs.All()
+	require.NotEmpty(t, records, "the client logged nothing at all, so this proves nothing")
+	for _, entry := range records {
+		assert.NotContains(t, text(t, entry), secretCredential, "a credential reached the log")
+	}
+
+	succeeded := logs.FilterMessage("call succeeded").All()
+	require.Len(t, succeeded, 1)
+	assert.Equal(t, []any{"x-api-key"}, succeeded[0].ContextMap()["headers"],
+		"header names are what a log can usefully carry")
+}
+
+// Sending a token in the clear is allowed — grpctui exists for local servers
+// and port-forwards — but it is not something to do silently.
+func TestClient_WarnsAboutCredentialsOverPlaintext(t *testing.T) {
+	ts := startTestServer(t)
+
+	_, logs := observed(t, ts, grpcclient.WithAuth(grpcclient.Auth{
+		Kind:  grpcclient.AuthBearer,
+		Token: secretCredential,
+	}))
+
+	warnings := logs.FilterMessage("sending credentials over a plaintext connection").All()
+	require.Len(t, warnings, 1)
+	assert.Equal(t, zapcore.WarnLevel, warnings[0].Level)
+	assert.NotContains(t, text(t, warnings[0]), secretCredential)
+}
+
+func TestClient_DoesNotWarnAboutCredentialsOverTLS(t *testing.T) {
+	ts := startTestServer(t)
+
+	_, logs := observed(t, ts,
+		grpcclient.WithSecurity(grpcclient.Security{TLS: true, InsecureSkipVerify: true}),
+		grpcclient.WithAuth(grpcclient.Auth{Kind: grpcclient.AuthBearer, Token: secretCredential}))
+
+	assert.Empty(t, logs.FilterMessage("sending credentials over a plaintext connection").All())
 }

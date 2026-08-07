@@ -19,6 +19,25 @@ type discoveryFailedMsg struct {
 	err error
 }
 
+// clientConnectedMsg carries the outcome of opening a connection for a profile.
+// Dialling is a tea.Cmd like any other blocking work: it reads a CA bundle and
+// a client key off disk, which Update must not do.
+type clientConnectedMsg struct {
+	// seq identifies the attempt, so that a dial the user has moved on from
+	// cannot install its client over a newer one.
+	seq int
+
+	// index and profile say which connection this is, for the switcher's active
+	// marker and the metadata panel's headers.
+	index   int
+	profile grpcclient.Profile
+
+	// client is the new connection, and err the reason there is none. On a
+	// failure the model keeps the connection it already had.
+	client Client
+	err    error
+}
+
 // callFinishedMsg carries the outcome of one unary call. The response is
 // already rendered as JSON: decoding happens in the command, not in Update.
 type callFinishedMsg struct {

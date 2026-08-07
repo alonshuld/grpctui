@@ -7,11 +7,11 @@ browser tab.
 Point it at a gRPC server with reflection enabled and it discovers the entire
 API surface with zero configuration.
 
-> **Status: v0.3 — Real Request Forms.** Discover a server, fill in a request
-> form generated from the method's input message — nested messages, repeated
-> fields, maps, `oneof` variants and enums included — send a unary call, and
-> read the highlighted response. Metadata and TLS land in v0.4; streaming in
-> v0.5.
+> **Status: v0.4 — Metadata & Auth.** Discover a server, fill in a request form
+> generated from the method's input message — nested messages, repeated fields,
+> maps, `oneof` variants and enums included — send the headers a real service
+> wants alongside it, over TLS or mTLS, and switch between saved connections
+> without restarting. Streaming lands in v0.5.
 
 ## Install
 
@@ -38,6 +38,14 @@ as such, rather than reported as a failed call.
 
 ```
 Flags:
+  -profile string     connection profile to start on
+  -tls                connect over TLS
+  -cacert string      verify the server against this PEM bundle
+  -cert string        PEM client certificate to present (mutual TLS)
+  -key string         PEM key for -cert
+  -servername string  name to check the certificate against
+  -insecure           accept any certificate the server offers
+  -H key: value       request header; repeatable
   -config string      read settings from this file; empty skips it
                       (default "$XDG_CONFIG_HOME/grpctui/config.yaml")
   -log-file string    write logs to this file; empty disables logging
@@ -56,9 +64,47 @@ import "google.golang.org/grpc/reflection"
 reflection.Register(srv)
 ```
 
-grpctui connects in plaintext only. TLS and mTLS arrive in v0.4.
-
 [reflection]: https://github.com/grpc/grpc/blob/master/doc/server-reflection.md
+
+## Headers, TLS and auth
+
+Connections are plaintext unless you say otherwise, which is what a local
+server almost always wants. Everything beyond that is opt-in:
+
+```bash
+grpctui -tls api.example.com:443                          # system trust store
+grpctui -cacert ./ca.pem api.internal:443                 # a private CA
+grpctui -cert ./client.pem -key ./client-key.pem api:443  # mutual TLS
+grpctui -insecure staging.internal:443                    # accept anything
+grpctui -H 'authorization: Bearer abc' localhost:50051    # one-off headers
+```
+
+Naming a certificate, a CA or a server name implies `-tls`; you never have to
+pass both. `-insecure` turns off certificate *and* hostname verification, so
+the connection is encrypted but no longer authenticated — the status bar says
+`TLS (unverified)` for as long as it is on.
+
+The **Headers** panel holds the metadata sent with every RPC, including
+reflection: a server that gates its API behind a header gates its schema behind
+the same one. `tab` into it, `a` adds a header, `h`/`l` move between the name
+and the value, `enter` edits, and `space` parks a header without deleting it —
+so you can find out whether the `authorization` header was the problem without
+retyping the token afterwards. It appears when it has something to show.
+
+Bad headers are caught where they are typed: `grpc-`-prefixed names are
+reserved by the protocol, a `-bin` value has to be base64, and a call is
+refused rather than sent with a header the server would reject.
+
+## Connections
+
+`p` opens the connection switcher: the saved `host:port` + TLS + auth
+combinations from your config file. `enter` connects, which re-runs discovery
+and swaps in that connection's headers. Picking the one you are already on
+reconnects, which is how you recover a connection the server dropped.
+
+Credentials are never rendered — the switcher and the status bar say `bearer`
+or `basic (alice)`, never the token — and the log file records header *names*
+and message sizes, never their contents.
 
 ## Configuration
 
@@ -74,10 +120,57 @@ target: localhost:50051
 A target argument always beats the file, so `grpctui other.example:443` still
 does what it says.
 
+Once you have more than one server, name them. Each profile is a whole
+connection — where it is, how it is protected, who you are on it, and what
+headers ride along — and `p` moves between them without restarting:
+
+```yaml
+profile: dev            # which one to start on; the first, if omitted
+
+profiles:
+  - name: dev
+    target: localhost:50051
+    metadata:
+      x-tenant: acme
+
+  - name: staging
+    target: api.staging.example.com:443
+    tls:
+      enabled: true
+      ca_cert: ~/certs/staging-ca.pem
+      server_name: api.staging.internal   # if not the address dialled
+    auth:
+      type: bearer
+      token: ${STAGING_TOKEN}
+
+  - name: prod
+    target: api.example.com:443
+    tls:
+      enabled: true
+      client_cert: ~/certs/client.pem     # mutual TLS
+      client_key: ~/certs/client-key.pem
+    auth:
+      type: basic
+      username: alice
+      password: ${PROD_PASSWORD}
+```
+
+**Secrets belong in the environment, not in the file.** Any value may be written
+as `${VAR}` and is replaced at load time; a variable that is not set is an error
+rather than an empty token, because an empty token fails in a way that looks
+like anything but a config problem. Only the braced form is a reference, so a
+password containing a literal `$` survives being written down.
+
+`--profile` picks the connection to start on, and the other flags override that
+one profile for the session: `grpctui --profile staging --insecure` is your
+saved staging connection with verification off for one run, not a new connection
+that has lost its credentials.
+
 Nothing about the file is guessed at. The default path may be absent — that is
 the zero-config case — but a path you name with `--config` has to exist, and an
 unknown key is an error. A typo is never silently ignored, whether it is in the
-filename or inside the file.
+filename or inside the file. Profiles must be named, and two with the same name
+is an error rather than a coin toss.
 
 ## Request fields
 
@@ -127,11 +220,12 @@ added it on purpose.
 | `→`/`l`, `←`/`h` | Expand / collapse a service or a request field |
 | `L`/`⇧→`, `H`/`⇧←` | Scroll the response left / right |
 | `enter` | Toggle a service, select a method, edit a field, or open a field that holds others |
-| `space` | Toggle a `bool`, pick an enum value or a `oneof` variant, send an empty message |
-| `a`, `d` | Add / remove an item of a repeated or map field |
+| `space` | Toggle a `bool`, pick an enum value or a `oneof` variant, send an empty message, park a header |
+| `a`, `d` | Add / remove an item of a repeated or map field, or a header |
 | `ctrl+s` | Send the request |
-| `esc` | Stop editing a field, or cancel a call in flight |
+| `esc` | Stop editing a field, cancel a call in flight, or close the connection switcher |
 | `tab`, `shift+tab` | Switch panel |
+| `p` | Open the connection switcher |
 | `r` | Retry after a failed connection |
 | `?` | Toggle the full help |
 | `q` | Quit |
@@ -155,9 +249,9 @@ The codebase is four strictly one-directional layers — transport → domain �
 
 | Package | Responsibility |
 | --- | --- |
-| `internal/grpcclient` | Dial, reflection discovery, dynamic invoke |
+| `internal/grpcclient` | Dial, TLS/mTLS, credentials, reflection discovery, dynamic invoke |
 | `internal/protoschema` | Descriptor → form-field tree; values → wire message |
-| `internal/config` | `~/.config/grpctui/config.yaml` |
+| `internal/config` | `~/.config/grpctui/config.yaml`, connection profiles |
 | `internal/ui` | bubbletea models, panels, keymap, styles |
 | `cmd/grpctui` | Flags, config, `tea.Program` bootstrap |
 

@@ -89,9 +89,11 @@ func StatusOf(err error) (CallStatus, bool) {
 // the method's output descriptor.
 //
 // ctx bounds the call: cancelling it aborts the RPC, which is how the UI stops
-// a request the user gave up on. Errors keep their gRPC status, so
-// [StatusOf] — and [status.FromError] — still work on the returned error.
-func (c *Client) InvokeUnary(ctx context.Context, method Method, req proto.Message) (*UnaryResponse, error) {
+// a request the user gave up on. md is the request metadata to send with it,
+// on top of whatever credential the connection itself carries. Errors keep
+// their gRPC status, so [StatusOf] — and [status.FromError] — still work on the
+// returned error.
+func (c *Client) InvokeUnary(ctx context.Context, method Method, req proto.Message, md Metadata) (*UnaryResponse, error) {
 	if method.Descriptor == nil {
 		return nil, fmt.Errorf("invoke %q: method has no descriptor", method.FullName)
 	}
@@ -102,11 +104,16 @@ func (c *Client) InvokeUnary(ctx context.Context, method Method, req proto.Messa
 		return nil, fmt.Errorf("invoke %s: no request message", method.FullName)
 	}
 
+	ctx, err := md.attach(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("invoke %s: %w", method.FullName, err)
+	}
+
 	path := methodPath(method.Descriptor)
 	resp := dynamicpb.NewMessage(method.Descriptor.Output())
 
 	start := time.Now()
-	err := c.conn.Invoke(ctx, path, req, resp)
+	err = c.conn.Invoke(ctx, path, req, resp)
 	took := time.Since(start)
 
 	if err != nil {
@@ -121,14 +128,15 @@ func (c *Client) InvokeUnary(ctx context.Context, method Method, req proto.Messa
 		return nil, fmt.Errorf("invoke %s: %w", method.FullName, err)
 	}
 
-	// Sizes only: a request or response body may hold anything the user typed,
-	// and v0.4 puts credentials in the same neighbourhood.
+	// Sizes and header names only: a request or response body may hold anything
+	// the user typed, and a header value is where the bearer token lives.
 	c.logger.Info("call succeeded",
 		zap.String("target", c.target),
 		zap.String("method", method.FullName),
 		zap.Duration("took", took),
 		zap.Int("request_bytes", proto.Size(req)),
 		zap.Int("response_bytes", proto.Size(resp)),
+		zap.Strings("headers", md.Keys()),
 	)
 
 	return &UnaryResponse{Message: resp, Duration: took}, nil

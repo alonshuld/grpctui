@@ -46,6 +46,12 @@ type KeyMap struct {
 	NextPanel key.Binding
 	PrevPanel key.Binding
 
+	// Profiles opens the connection switcher. It is a modal chooser rather than
+	// a panel, so it has a key of its own rather than a place in the tab cycle:
+	// switching connection is a thing you do occasionally, not something to
+	// step past on the way to the response.
+	Profiles key.Binding
+
 	Retry key.Binding
 	Help  key.Binding
 	Quit  key.Binding
@@ -132,6 +138,10 @@ func Default() KeyMap {
 			key.WithKeys("shift+tab"),
 			key.WithHelp("shift+tab", "prev panel"),
 		),
+		Profiles: key.NewBinding(
+			key.WithKeys("p"),
+			key.WithHelp("p", "connections"),
+		),
 		Retry: key.NewBinding(
 			key.WithKeys("r"),
 			key.WithHelp("r", "retry"),
@@ -169,7 +179,7 @@ func (k KeyMap) FullHelp() [][]key.Binding {
 		// sharing a column with them keeps the bar at five columns: a sixth pushes
 		// it past 100 cells, where the last one is truncated away entirely.
 		{k.Add, k.Remove, k.Send, k.Cancel},
-		{k.NextPanel, k.PrevPanel},
+		{k.NextPanel, k.PrevPanel, k.Profiles},
 		{k.Retry, k.Help, k.Quit},
 	}
 }
