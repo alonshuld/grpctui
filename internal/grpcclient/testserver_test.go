@@ -33,6 +33,13 @@ type serverConfig struct {
 	reflect bool
 	health  bool
 	delay   time.Duration
+	serving []string
+}
+
+// withServingService makes the health server answer SERVING for name, so that a
+// call carrying a chosen payload succeeds instead of coming back NotFound.
+func withServingService(name string) serverOption {
+	return func(cfg *serverConfig) { cfg.serving = append(cfg.serving, name) }
 }
 
 // withoutReflection starts a server that does not serve the reflection API.
@@ -58,7 +65,11 @@ func startTestServer(t *testing.T, opts ...serverOption) *testServer {
 	lis := bufconn.Listen(bufSize)
 	srv := grpc.NewServer(grpc.UnaryInterceptor(delayInterceptor(cfg.delay)))
 	if cfg.health {
-		healthpb.RegisterHealthServer(srv, health.NewServer())
+		hs := health.NewServer()
+		for _, name := range cfg.serving {
+			hs.SetServingStatus(name, healthpb.HealthCheckResponse_SERVING)
+		}
+		healthpb.RegisterHealthServer(srv, hs)
 	}
 	if cfg.reflect {
 		reflection.Register(srv)
