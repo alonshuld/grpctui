@@ -33,8 +33,13 @@ func main() {
 }
 
 type options struct {
-	target      string
-	configFile  string
+	target     string
+	configFile string
+
+	// configNamed records whether --config was given rather than defaulted. A
+	// config file the user named has to exist; the default one does not.
+	configNamed bool
+
 	logFile     string
 	logLevel    string
 	showVersion bool
@@ -60,7 +65,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitOK
 	}
 
-	cfg, err := config.Load(opts.configFile)
+	cfg, err := loadConfig(opts)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "grpctui: %v\n", err)
 		return exitError
@@ -87,6 +92,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitError
 	}
 	return exitOK
+}
+
+// loadConfig reads the config file, holding a path the user named to a higher
+// standard than the default one: the default may be absent, a named one may
+// not.
+func loadConfig(opts options) (config.Config, error) {
+	if opts.configNamed {
+		return config.LoadFile(opts.configFile)
+	}
+	return config.Load(opts.configFile)
 }
 
 // start runs the TUI. Everything it writes goes to out, which is the terminal
@@ -146,6 +161,15 @@ func parseFlags(args []string, stderr io.Writer) (options, error) {
 	if err := fs.Parse(args); err != nil {
 		return opts, err
 	}
+
+	// Visit reports only the flags actually given, which is the difference
+	// between "the user chose this config file" and "this is where one would
+	// live".
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "config" {
+			opts.configNamed = true
+		}
+	})
 
 	// A missing target is not decided here: it may still come from the config
 	// file, which is loaded once the flags — including --config — are known.
