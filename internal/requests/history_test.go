@@ -3,6 +3,7 @@ package requests_test
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -34,7 +35,11 @@ func TestLoadHistory_Malformed(t *testing.T) {
 
 	_, err := requests.LoadHistory(path, 0)
 	require.Error(t, err, "a history that exists but cannot be read must not be silently replaced")
-	assert.Contains(t, err.Error(), path)
+
+	// Quoted, not raw: the error renders the path with %q, which doubles the
+	// separators of a Windows path. Comparing against the bare string passes on
+	// Unix and fails on Windows for a reason that has nothing to do with history.
+	assert.Contains(t, err.Error(), strconv.Quote(path), "the error must name the file")
 }
 
 func TestLoadHistory_UnknownField(t *testing.T) {
