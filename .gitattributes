@@ -3,6 +3,12 @@
 # Windows and nowhere else.
 *.golden -text
 
+# docs/keybindings.md is generated from the keymap and compared against it by a
+# test, so it is the same byte-for-byte case as a golden file — and it failed on
+# Windows and nowhere else until this line existed. The rest of the markdown
+# goes the same way because a Go repository is an LF repository.
+*.md text eol=lf
+
 # Go tooling assumes LF, and the pre-push hook is run by sh.
 *.go text eol=lf
 *.mod text eol=lf
