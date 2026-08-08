@@ -43,6 +43,75 @@ const (
 	cmdComplete = "__complete"
 )
 
+// commands is every word that names a subcommand rather than a target address.
+var commands = []string{cmdRun, cmdCompletion, cmdKeys, cmdComplete}
+
+// splitCommand finds the subcommand on a command line wherever it appears, and
+// returns it with the rest of the arguments in the order they were given.
+//
+// `grpctui run smoke` is the form the dispatch was first written for, and
+// `grpctui -config ./ci.yaml keys` is the form somebody types after a day of
+// putting -config first. Both name a subcommand; only the first has it in
+// args[0], and reading only args[0] made the second one dial a host called
+// "keys" and take over the terminal.
+//
+// A flag's value is stepped over rather than examined, so `-profile run` names
+// a profile and not a subcommand. The first bare word decides everything: it is
+// either a subcommand or the target address, and an address genuinely spelled
+// "keys" is not worth breaking `grpctui keys` for.
+func splitCommand(args []string) (string, []string) {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+
+		switch {
+		case arg == "--":
+			// Everything after it is an argument by definition, target included.
+			return "", args
+
+		case len(arg) > 1 && strings.HasPrefix(arg, "-"):
+			// `-flag=value` carries its own value; `-flag value` eats the next word,
+			// unless it is a boolean, which never does.
+			if !strings.Contains(arg, "=") && takesValue(strings.TrimLeft(arg, "-")) {
+				i++
+			}
+
+		case slices.Contains(commands, arg):
+			return arg, slices.Concat(args[:i:i], args[i+1:])
+
+		default:
+			return "", args
+		}
+	}
+	return "", args
+}
+
+// takesValue reports whether the named flag consumes the word after it. An
+// unknown flag is assumed not to: the parse that is about to happen will report
+// it, and guessing that it swallowed the subcommand would report it as the
+// wrong thing entirely.
+func takesValue(name string) bool {
+	f := allFlags().Lookup(name)
+	if f == nil {
+		return false
+	}
+	boolean, ok := f.Value.(interface{ IsBoolFlag() bool })
+	return !ok || !boolean.IsBoolFlag()
+}
+
+// allFlags is every flag either command takes, declared on one throwaway set.
+//
+// It exists so that a command line can be read before it is known which command
+// it is — whether a word is the subcommand depends on whether the flag before
+// it wanted a value, and that answer must not itself depend on the subcommand.
+func allFlags() *flag.FlagSet {
+	var opts options
+	fs := flag.NewFlagSet("grpctui", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	registerFlags(fs, &opts)
+	registerRunFlags(fs, &opts)
+	return fs
+}
+
 // The flag names that more than one place needs to agree on: the help page
 // groups them, the completion scripts offer them, and applyFlags asks whether
 // each was given. Only those appear here — a name used once is clearer spelled

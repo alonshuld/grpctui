@@ -184,17 +184,17 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitOK
 	}
 
-	if len(args) > 0 {
-		switch args[0] {
-		case cmdRun:
-			return runCollection(args[1:], stdout, stderr)
-		case cmdCompletion:
-			return completion(args[1:], stdout, stderr)
-		case cmdKeys:
-			return printKeys(args[1:], stdout, stderr)
-		case cmdComplete:
-			return completeValues(args[1:], stdout)
-		}
+	// The subcommand is looked for anywhere on the line rather than only in
+	// args[0], so that the flags may come first: see [splitCommand].
+	switch name, rest := splitCommand(args); name {
+	case cmdRun:
+		return runCollection(rest, stdout, stderr)
+	case cmdCompletion:
+		return completion(rest, stdout, stderr)
+	case cmdKeys:
+		return printKeys(rest, stdout, stderr)
+	case cmdComplete:
+		return completeValues(rest, stdout)
 	}
 
 	opts, err := parseFlags(args, stderr)
@@ -207,7 +207,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if opts.showVersion {
-		_, _ = fmt.Fprintf(stdout, "grpctui %s\n", version.Version())
+		printVersion(stdout)
 		return exitOK
 	}
 
@@ -239,7 +239,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 // flag the interactive command does not, and printing it under the wrong
 // heading — or not at all — is the sort of thing help pages are blamed for.
 func commandName(args []string) string {
-	if len(args) > 0 && args[0] == cmdRun {
+	if name, _ := splitCommand(args); name == cmdRun {
 		return "grpctui " + cmdRun
 	}
 	return "grpctui"
@@ -679,6 +679,15 @@ func parseFlags(args []string, stderr io.Writer) (options, error) {
 	}
 
 	return opts, nil
+}
+
+// printVersion answers -version, wherever on the command line it was given.
+//
+// Every form of the command takes the flag, because every form of the command
+// registers it — and a `grpctui keys -version` that printed a keybinding table
+// would be answering a question nobody asked.
+func printVersion(stdout io.Writer) {
+	_, _ = fmt.Fprintf(stdout, "grpctui %s\n", version.Version())
 }
 
 // newFlagSet builds a flag set with grpctui's flags on it and its help page

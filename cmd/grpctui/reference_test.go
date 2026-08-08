@@ -105,3 +105,36 @@ func TestRun_KeysHonoursConfigFlag(t *testing.T) {
 	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 	assert.Contains(t, stdout.String(), "ctrl+q")
 }
+
+// TestRun_KeysAfterTheFlags pins the other order. `grpctui -config ./ci.yaml
+// keys` used to parse "keys" as the target address and launch the TUI against a
+// host by that name — which, on a machine with no terminal, failed with an
+// error about a TTY and no hint of the real problem.
+func TestRun_KeysAfterTheFlags(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	path := filepath.Join(t.TempDir(), "ci.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("keys:\n  quit: ctrl+q\n"), 0o600))
+
+	var stdout, stderr bytes.Buffer
+	code := runWithin(t, runTimeout, []string{"-config", path, cmdKeys}, &stdout, &stderr)
+
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
+	assert.Contains(t, stdout.String(), "ctrl+q")
+}
+
+// TestRun_KeysPrintsTheVersion pins that -version means here what it means
+// everywhere else. The command registers the flag, so a table printed in answer
+// to it would be answering a question nobody asked.
+func TestRun_KeysPrintsTheVersion(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	var stdout, stderr bytes.Buffer
+	code := runWithin(t, runTimeout, []string{cmdKeys, "-version"}, &stdout, &stderr)
+
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
+	assert.Contains(t, stdout.String(), "grpctui ")
+	assert.NotContains(t, stdout.String(), "keybindings", "the table is not the answer to -version")
+}
