@@ -239,9 +239,15 @@ func TestStream_SendAfterTheCallDied(t *testing.T) {
 
 	require.ErrorIs(t, err, io.EOF, "a send onto a dead call is a bare io.EOF")
 
-	_, recvErr := s.Recv()
+	// Drained rather than read once. Chat echoes, so the reply to the first
+	// message may already be sitting in the receive buffer when the server dies —
+	// and then the next Recv hands back that message, not the failure. Reading a
+	// single one made this pass or fail on whether the echo had landed yet.
+	_, recvErr := drain(t, s)
+
 	require.Error(t, recvErr)
-	assert.NotErrorIs(t, recvErr, io.EOF, "Recv holds the reason, and it is not 'the stream ended cleanly'")
+	assert.NotErrorIs(t, recvErr, io.EOF,
+		"Recv holds the reason, and a killed server is not 'the stream ended cleanly'")
 }
 
 // TestStream_SendReportsATransportFailure covers the other branch of the same
