@@ -12,6 +12,14 @@
 // variable is an error: a bearer token that quietly becomes the empty string
 // produces an authentication failure that looks like anything but a config
 // problem.
+//
+// That is not the same thing as the {{name}} references v0.7 added, and the two
+// syntaxes are deliberately distinct. ${VAR} is the process environment,
+// resolved once at load, and is how a secret reaches this file without being
+// written in it; {{name}} is a grpctui variable, resolved when a request is
+// sent, from a set the user can switch and add to while the TUI is running. A
+// file that could not say which it meant would be a file that leaked one into
+// the other. See [Environment] and internal/vars.
 package config
 
 import (
@@ -52,6 +60,12 @@ type Config struct {
 
 	// Profiles are the saved connections the switcher cycles through.
 	Profiles []Profile `yaml:"profiles"`
+
+	// Env names the environment to start in. Empty starts in the first one.
+	Env string `yaml:"environment"`
+
+	// Envs are the variable sets {{name}} references resolve against.
+	Envs []Environment `yaml:"environments"`
 }
 
 // Profile is one saved connection.
@@ -177,6 +191,9 @@ func read(path string, mustExist bool) (Config, error) {
 	// makes --profile ambiguous, and finding that out on the third connection of
 	// the day is worse than finding it out at startup.
 	if err := cfg.validateNames(); err != nil {
+		return Config{}, fmt.Errorf("config %q: %w", path, err)
+	}
+	if err := cfg.validateEnvironmentNames(); err != nil {
 		return Config{}, fmt.Errorf("config %q: %w", path, err)
 	}
 	return cfg, nil
