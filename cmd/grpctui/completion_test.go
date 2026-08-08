@@ -26,10 +26,16 @@ func TestCompletion(t *testing.T) {
 			script := stdout.String()
 			assert.NotEmpty(t, script)
 
-			// Every script has to know about both subcommands and call back into
-			// the hidden helper for the names only grpctui knows.
-			assert.Contains(t, script, cmdRun)
-			assert.Contains(t, script, cmdCompletion)
+			// Every script has to be able to offer every subcommand, and to call
+			// back into the hidden helper for the names only grpctui knows. bash
+			// and fish ask for the subcommand list rather than baking it in,
+			// which is why adding one needs no change to them; zsh describes them
+			// inline so that it can put a sentence beside each.
+			for _, cmd := range []string{cmdRun, cmdKeys, cmdCompletion} {
+				assert.True(t,
+					strings.Contains(script, cmd) || strings.Contains(script, cmdComplete+" commands"),
+					"%s completion cannot offer %s", shell, cmd)
+			}
 			assert.Contains(t, script, cmdComplete)
 
 			// And every flag has to be offerable, or completing one silently
@@ -95,7 +101,7 @@ themes:
 		"themes":       {styles.ThemeAuto, styles.ThemeDark, styles.ThemeLight, "midnight"},
 		"collections":  {"smoke"},
 		"shells":       shells,
-		"commands":     {cmdRun, cmdCompletion},
+		"commands":     {cmdRun, cmdKeys, cmdCompletion},
 		"renderers":    render.BuiltinNames(),
 		"actions":      keys.Names(),
 		"colors":       styles.RoleNames(),

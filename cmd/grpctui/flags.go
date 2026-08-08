@@ -31,6 +31,11 @@ const (
 	// cmdCompletion prints a shell completion script.
 	cmdCompletion = "completion"
 
+	// cmdKeys prints the complete keybinding reference — the user's own, with
+	// whatever their config file remaps applied, which is why it is a command
+	// and not only a page in docs/.
+	cmdKeys = "keys"
+
 	// cmdComplete is the hidden helper those scripts call back into for the
 	// names only grpctui knows: profiles, environments, themes, collections. It
 	// is hidden because it is an implementation detail of the scripts and its
@@ -149,6 +154,7 @@ const usageText = `grpctui — a terminal UI for exploring, calling and debuggin
 Usage:
   grpctui [flags] <host:port>        explore a target interactively
   grpctui run [flags] <collection>   replay a saved collection, no UI
+  grpctui keys                       print the keybinding reference, yours included
   grpctui completion <shell>         print a completion script for bash, zsh or fish
 
 The target may also come from the config file — its ` + "`target`" + ` key, the profile
@@ -168,6 +174,7 @@ const examples = `Examples:
   grpctui -proto api/v1/greeter.proto -import-path api localhost:50051
   grpctui -profile staging -env staging
   grpctui run smoke -target localhost:50051 -format json
+  grpctui keys
   grpctui completion zsh > ~/.zsh/completions/_grpctui
 `
 

@@ -24,6 +24,7 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -37,6 +38,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/alonshuld/grpctui/internal/format"
 	"github.com/alonshuld/grpctui/internal/grpcclient"
 )
 
@@ -47,6 +49,13 @@ import (
 // profiles is the step up from that, and the top-level settings become the
 // first profile in the list when both are present.
 type Config struct {
+	// Version is the file format this config is written in. It may be left out —
+	// and almost always is, since grpctui never writes this file — in which case
+	// the file is read as the format this binary knows. Its whole job is to let a
+	// config file written by a *later* grpctui say so, rather than failing on
+	// whichever new key it happens to mention first. See internal/format.
+	Version format.Version `yaml:"version"`
+
 	// Target is the address to connect to when none is given on the command
 	// line. A target argument always wins over this.
 	Target string `yaml:"target"`
@@ -235,16 +244,23 @@ func read(path string, mustExist bool) (Config, error) {
 		return Config{}, nil
 	}
 
-	f, err := os.Open(path) // #nosec G304 -- the path is the user's own config file, from --config or the XDG default.
+	body, err := os.ReadFile(path) // #nosec G304 -- the path is the user's own config file, from --config or the XDG default.
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) && !mustExist {
 			return Config{}, nil
 		}
 		return Config{}, fmt.Errorf("open config %q: %w", path, err)
 	}
-	defer func() { _ = f.Close() }()
 
-	dec := yaml.NewDecoder(f)
+	// The version is read on its own pass, before the strict one, because the
+	// strict pass is exactly what a file from a later grpctui would fail: it
+	// would report the new key as unknown, which sends the reader hunting for a
+	// typo instead of upgrading. See internal/format.
+	if err := format.Check(body, fmt.Sprintf("config %q", path)); err != nil {
+		return Config{}, err
+	}
+
+	dec := yaml.NewDecoder(bytes.NewReader(body))
 	dec.KnownFields(true)
 
 	var cfg Config

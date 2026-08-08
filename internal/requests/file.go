@@ -1,14 +1,18 @@
 package requests
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/alonshuld/grpctui/internal/format"
 )
 
 // dirPerm and filePerm are what grpctui creates its own files with. A history
@@ -27,16 +31,23 @@ const (
 // a collection is hand-edited, and a silently ignored typo in a field name is
 // how a request goes out without the header you thought you had written.
 func readYAML(path string, v any) error {
-	f, err := os.Open(path) // #nosec G304 -- the path is grpctui's own state or a collection the user pointed it at.
+	body, err := os.ReadFile(path) // #nosec G304 -- the path is grpctui's own state or a collection the user pointed it at.
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil
 		}
 		return fmt.Errorf("open %q: %w", path, err)
 	}
-	defer func() { _ = f.Close() }()
 
-	dec := yaml.NewDecoder(f)
+	// The format version is read first, on a pass of its own, because rejecting
+	// unknown keys is exactly what would break on a file written by a later
+	// grpctui — and "field retries not found" is a message about the wrong
+	// problem. See internal/format.
+	if err := format.Check(body, strconv.Quote(path)); err != nil {
+		return err
+	}
+
+	dec := yaml.NewDecoder(bytes.NewReader(body))
 	dec.KnownFields(true)
 
 	if err := dec.Decode(v); err != nil {

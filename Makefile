@@ -34,6 +34,15 @@ cover: ## Write and open an HTML coverage report
 golden: ## Regenerate teatest golden files (review the diff!)
 	$(GO) test ./internal/ui -update
 
+.PHONY: docs
+docs: ## Regenerate the generated docs (docs/keybindings.md)
+	$(GO) test ./internal/ui/keys -update
+
+.PHONY: demos
+demos: ## Re-record the README GIFs — needs vhs (see docs/demos/README.md)
+	@command -v vhs >/dev/null || { echo "vhs is not installed: go install github.com/charmbracelet/vhs@latest"; exit 1; }
+	@for tape in docs/demos/*.tape; do echo "recording $$tape"; vhs "$$tape"; done
+
 .PHONY: fmt
 fmt: ## Format the tree
 	gofmt -w .

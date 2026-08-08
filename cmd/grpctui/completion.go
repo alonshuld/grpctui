@@ -94,7 +94,7 @@ func candidates(what string) []string {
 	case kindShells:
 		return shells
 	case kindCommands:
-		return []string{cmdRun, cmdCompletion}
+		return []string{cmdRun, cmdKeys, cmdCompletion}
 	case kindRenderers:
 		return render.BuiltinNames()
 	case kindActions:
@@ -309,6 +309,7 @@ _grpctui() {
     local -a subcommands
     subcommands=(
         '%s:replay a saved collection with no UI'
+        '%s:print the keybinding reference'
         '%s:print a completion script'
     )
 
@@ -329,6 +330,7 @@ _grpctui() {
 _grpctui "$@"
 `,
 		cmdRun,
+		cmdKeys,
 		cmdCompletion,
 		cmdRun,
 		cmdCompletion,

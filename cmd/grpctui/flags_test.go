@@ -53,7 +53,7 @@ func TestPrintUsage(t *testing.T) {
 	})
 
 	for _, want := range []string{
-		"Usage:", cmdRun, cmdCompletion, "Examples:",
+		"Usage:", cmdRun, cmdKeys, cmdCompletion, "Examples:",
 	} {
 		assert.Contains(t, page, want)
 	}

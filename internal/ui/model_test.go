@@ -322,44 +322,44 @@ func requestValue(t *testing.T, req proto.Message, name string) protoreflect.Val
 	return m.Get(fd)
 }
 
-func newModel(t *testing.T, client ui.Client, opts ...ui.Option) ui.Model {
-	t.Helper()
-	return ui.New(client, append([]ui.Option{ui.WithLogger(zaptest.NewLogger(t))}, opts...)...)
+func newModel(tb testing.TB, client ui.Client, opts ...ui.Option) ui.Model {
+	tb.Helper()
+	return ui.New(client, append([]ui.Option{ui.WithLogger(zaptest.NewLogger(tb))}, opts...)...)
 }
 
 // asModel narrows the tea.Model that Update returns back to ui.Model.
-func asModel(t *testing.T, m tea.Model) ui.Model {
-	t.Helper()
+func asModel(tb testing.TB, m tea.Model) ui.Model {
+	tb.Helper()
 	model, ok := m.(ui.Model)
-	require.True(t, ok, "expected a ui.Model, got %T", m)
+	require.True(tb, ok, "expected a ui.Model, got %T", m)
 	return model
 }
 
 // sized returns a model that has already received its window size.
-func sized(t *testing.T, m ui.Model) ui.Model {
-	t.Helper()
+func sized(tb testing.TB, m ui.Model) ui.Model {
+	tb.Helper()
 	next, _ := m.Update(tea.WindowSizeMsg{Width: termWidth, Height: termHeight})
-	return asModel(t, next)
+	return asModel(tb, next)
 }
 
 // settled runs Init's discovery command and feeds the resulting message back,
 // leaving the model in whatever state discovery produced.
-func settled(t *testing.T, m ui.Model) ui.Model {
-	t.Helper()
+func settled(tb testing.TB, m ui.Model) ui.Model {
+	tb.Helper()
 
-	m = sized(t, m)
-	msg := discoveryResult(t, m)
+	m = sized(tb, m)
+	msg := discoveryResult(tb, m)
 	next, _ := m.Update(msg)
-	return asModel(t, next)
+	return asModel(tb, next)
 }
 
 // discoveryResult drains Init's batch and returns the discovery message,
 // skipping the spinner tick.
-func discoveryResult(t *testing.T, m ui.Model) tea.Msg {
-	t.Helper()
+func discoveryResult(tb testing.TB, m ui.Model) tea.Msg {
+	tb.Helper()
 
 	cmd := m.Init()
-	require.NotNil(t, cmd)
+	require.NotNil(tb, cmd)
 
 	msgs := drain(cmd)
 	for _, msg := range msgs {
@@ -367,7 +367,7 @@ func discoveryResult(t *testing.T, m ui.Model) tea.Msg {
 			return msg
 		}
 	}
-	t.Fatalf("no discovery message in %v", msgs)
+	tb.Fatalf("no discovery message in %v", msgs)
 	return nil
 }
 

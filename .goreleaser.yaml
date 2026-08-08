@@ -2,6 +2,13 @@ version: 2
 
 project_name: grpctui
 
+# HOMEBREW_TAP_TOKEN is declared with an empty default so that the cask's
+# templates can ask whether it is set. GoReleaser fails a template that reads an
+# environment variable which is not there at all, which would turn "no tap
+# token" into "no release".
+env:
+  - HOMEBREW_TAP_TOKEN={{ if index .Env "HOMEBREW_TAP_TOKEN" }}{{ .Env.HOMEBREW_TAP_TOKEN }}{{ end }}
+
 before:
   hooks:
     - go mod tidy
@@ -37,6 +44,55 @@ archives:
 
 checksum:
   name_template: checksums.txt
+
+# The Homebrew tap, published to github.com/alonshuld/homebrew-tap so that
+# `brew install alonshuld/tap/grpctui` works on macOS and on Linux — GoReleaser
+# writes an on_linux block from the same archives. It is a cask rather than a
+# formula: a formula for a pre-built binary is deprecated upstream, and building
+# from source is what `go install` is already for.
+#
+# The tap is a *different repository*, which the release job's GITHUB_TOKEN
+# cannot write to — that token is scoped to this one. HOMEBREW_TAP_TOKEN is a
+# PAT with contents:write on the tap; when it is absent the cask is built and
+# not pushed, so a release still happens and the binaries still land. A tap that
+# silently stopped updating would be worse, so the release notes say which.
+homebrew_casks:
+  - name: grpctui
+    binaries: [grpctui]
+    homepage: https://github.com/alonshuld/grpctui
+    description: A terminal UI for exploring, calling, and debugging gRPC services
+
+    # Completions are not installed by the cask: `grpctui completion <shell>`
+    # prints them, and where a shell looks for them is the user's own business.
+    caveats: |
+      Shell completions:
+        grpctui completion zsh > ~/.zsh/completions/_grpctui
+
+    repository:
+      owner: alonshuld
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+
+    commit_author:
+      name: goreleaserbot
+      email: goreleaserbot@users.noreply.github.com
+    commit_msg_template: "grpctui {{ .Tag }}"
+
+    # A prerelease does not become what `brew install grpctui` gives you, and
+    # neither does a release built without the tap token.
+    skip_upload: '{{ if .Env.HOMEBREW_TAP_TOKEN }}auto{{ else }}true{{ end }}'
+
+    hooks:
+      post:
+        # The binaries are not notarised, so macOS quarantines them and the
+        # first run is a dialog rather than a TUI. Stripping the attribute is
+        # the documented workaround where signing is not on the table; it is
+        # deliberately the only thing the cask does to the machine.
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/grpctui"]
+          end
 
 changelog:
   use: github

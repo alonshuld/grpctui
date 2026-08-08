@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/alonshuld/grpctui/internal/format"
 )
 
 // DefaultCollection is where a request saved without a collection name goes.
@@ -32,6 +34,14 @@ type Collection struct {
 
 	// Path is the file the collection was read from or will be written to.
 	Path string `yaml:"-"`
+
+	// Version is the file format. It is written on every save and may be left
+	// out of a hand-written file, which is then read as this binary's own
+	// format. A collection is the file most likely to be shared between two
+	// machines running different grpctuis — it is committed beside a project and
+	// replayed in CI — so it is the one that most needs to be able to say which
+	// format it is in. See internal/format.
+	Version format.Version `yaml:"version"`
 
 	Requests []Request `yaml:"requests"`
 }
@@ -153,6 +163,11 @@ func (c *Collections) Save(collection string, r Request) error {
 	} else {
 		col.Requests = append(col.Requests, r)
 	}
+
+	// Saving stamps the current format on the file, whatever it said before. The
+	// entries about to be written are this binary's shape, so claiming an older
+	// version would be a lie that a later reader would act on.
+	col.Version = format.Current
 
 	if err := writeYAML(col.Path, col); err != nil {
 		return err
