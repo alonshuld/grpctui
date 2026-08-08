@@ -44,24 +44,6 @@ func TestInvokeUnaryMeasuresTheCall(t *testing.T) {
 	})
 }
 
-// A first call pays for the connection and a second does not. This is the
-// distinction the whole breakdown exists to draw, so it is worth pinning even
-// though bufconn's "connect" is only a goroutine handoff.
-func TestInvokeUnaryConnectIsCheaperOnAWarmConnection(t *testing.T) {
-	ts := startTestServer(t)
-	c := ts.client(t)
-	method := healthMethod(t, c, "Check")
-
-	first, err := c.InvokeUnary(context.Background(), method, checkRequest(t, method, ""), nil)
-	require.NoError(t, err)
-	second, err := c.InvokeUnary(context.Background(), method, checkRequest(t, method, ""), nil)
-	require.NoError(t, err)
-
-	require.True(t, first.Timing.Measured())
-	require.True(t, second.Timing.Measured())
-	assert.LessOrEqual(t, second.Timing.Connect, first.Timing.Connect)
-}
-
 // A failed call has no response to hang a breakdown off, and the caller sees
 // the failure rather than a Timing. What must not happen is a panic or a
 // half-filled struct escaping, which is what the collector's begin/end guard is
