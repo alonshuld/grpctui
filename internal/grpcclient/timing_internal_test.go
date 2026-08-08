@@ -82,6 +82,25 @@ func TestStatsHandlerFirstByteWithoutHeaders(t *testing.T) {
 	assert.Equal(t, 9*time.Millisecond, collector.result().FirstByte)
 }
 
+// A call the clock could not separate is still a measured call. Windows' timer
+// is coarse enough to return the same instant for both ends of a call over a
+// loopback transport, and deciding "measured" from the total would report those
+// — the fastest calls there are — as having no timings at all.
+func TestStatsHandlerZeroLengthCall(t *testing.T) {
+	base := time.Now()
+	h := statsHandler{now: stepClock(base, 0)}
+
+	ctx, collector := withTiming(context.Background())
+	h.HandleRPC(ctx, &stats.Begin{BeginTime: base})
+	h.HandleRPC(ctx, &stats.OutHeader{})
+	h.HandleRPC(ctx, &stats.InHeader{})
+	h.HandleRPC(ctx, &stats.End{BeginTime: base, EndTime: base})
+
+	got := collector.result()
+	assert.True(t, got.Measured)
+	assert.Zero(t, got.Total)
+}
+
 // A call that never reached the wire has no breakdown to give, and a
 // half-filled struct must not escape as one.
 func TestStatsHandlerIncompleteCall(t *testing.T) {
@@ -93,7 +112,7 @@ func TestStatsHandlerIncompleteCall(t *testing.T) {
 	h.HandleRPC(ctx, &stats.OutHeader{})
 
 	got := collector.result()
-	require.False(t, got.Measured())
+	require.False(t, got.Measured)
 	assert.Equal(t, Timing{}, got, "nothing partial leaks out")
 }
 

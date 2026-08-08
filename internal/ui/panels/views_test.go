@@ -232,6 +232,7 @@ func TestResponse_LatencyBreakdown(t *testing.T) {
 	result := okResult("{}")
 	result.Took = 25 * time.Millisecond
 	result.Timing = grpcclient.Timing{
+		Measured:      true,
 		Connect:       2 * time.Millisecond,
 		FirstByte:     18 * time.Millisecond,
 		Total:         24 * time.Millisecond,
@@ -271,12 +272,12 @@ func TestResponse_ClearDropsEverything(t *testing.T) {
 
 	result := okResult("{}")
 	result.Wire = helloWire("hi")
-	result.Timing = grpcclient.Timing{Total: time.Second}
+	result.Timing = grpcclient.Timing{Measured: true, Total: time.Second}
 	r.SetSuccess(result)
 
 	r.Clear()
 	assert.Empty(t, r.Wire())
-	assert.False(t, r.Timing().Measured())
+	assert.False(t, r.Timing().Measured)
 }
 
 func TestResponse_RawViewOfAFailedCall(t *testing.T) {

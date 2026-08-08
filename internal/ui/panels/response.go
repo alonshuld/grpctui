@@ -798,7 +798,7 @@ func (r Response) durationText() string {
 	if len(r.entries) > 0 {
 		return r.counts() + "  " + formatDuration(r.duration)
 	}
-	if !r.timing.Measured() {
+	if !r.timing.Measured {
 		return formatDuration(r.duration)
 	}
 

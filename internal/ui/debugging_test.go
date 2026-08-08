@@ -144,6 +144,7 @@ func TestModel_ShowsTheLatencyBreakdown(t *testing.T) {
 			Message:  dynamicMessage(method),
 			Duration: 30 * time.Millisecond,
 			Timing: grpcclient.Timing{
+				Measured:      true,
 				Connect:       3 * time.Millisecond,
 				FirstByte:     20 * time.Millisecond,
 				Total:         28 * time.Millisecond,

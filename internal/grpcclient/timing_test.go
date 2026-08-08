@@ -23,7 +23,7 @@ func TestInvokeUnaryMeasuresTheCall(t *testing.T) {
 	require.NoError(t, err)
 
 	timing := resp.Timing
-	require.True(t, timing.Measured(), "no breakdown was collected")
+	require.True(t, timing.Measured, "no breakdown was collected")
 
 	t.Run("the parts fit inside the whole", func(t *testing.T) {
 		assert.Positive(t, timing.Total)
@@ -61,9 +61,10 @@ func TestInvokeUnaryTimingOnAFailedCall(t *testing.T) {
 	assert.Nil(t, resp)
 }
 
-func TestTimingMeasured(t *testing.T) {
-	assert.False(t, grpcclient.Timing{}.Measured())
-	assert.False(t, grpcclient.Timing{Connect: time.Second}.Measured(),
-		"a breakdown with no total is not a measurement")
-	assert.True(t, grpcclient.Timing{Total: time.Millisecond}.Measured())
+// A call so fast the clock cannot see it is still a measured call. Deciding
+// otherwise from the total alone is what a coarse timer turns into "this
+// response has no timings", on exactly the responses that came back quickest.
+func TestTimingMeasuredIsNotTheTotal(t *testing.T) {
+	assert.False(t, grpcclient.Timing{}.Measured)
+	assert.True(t, grpcclient.Timing{Measured: true}.Measured)
 }

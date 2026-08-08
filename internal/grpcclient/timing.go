@@ -18,10 +18,18 @@ import (
 // settle.
 //
 // The zero value means nothing was measured — a client built without the stats
-// handler, which is what a UI test's fake is. Every consumer therefore has to
-// treat a zero [Timing.Total] as "no breakdown available" rather than as an
-// instant call.
+// handler, which is what a UI test's fake is.
 type Timing struct {
+	// Measured says gRPC reported a whole call, and is what every consumer has
+	// to check before showing a breakdown.
+	//
+	// It is a field rather than a "is the total non-zero" test because those are
+	// two different things: a coarse clock — Windows' is ~15ms — genuinely
+	// returns a zero total for a call over a loopback transport, and reporting
+	// that as "no breakdown available" would hide the timings of exactly the
+	// fastest calls.
+	Measured bool
+
 	// Connect is how long the call waited before its request headers went out:
 	// picking a transport, and on a cold connection resolving the name, opening
 	// the socket and completing the TLS handshake.
@@ -49,9 +57,6 @@ type Timing struct {
 	RequestBytes  int
 	ResponseBytes int
 }
-
-// Measured reports whether there is a breakdown to show.
-func (t Timing) Measured() bool { return t.Total > 0 }
 
 // callTiming collects one call's events.
 //
@@ -107,6 +112,7 @@ func (t *callTiming) result() Timing {
 	}
 
 	timing := Timing{
+		Measured:      true,
 		Total:         t.end.Sub(t.begin),
 		RequestBytes:  t.requestBytes,
 		ResponseBytes: t.responseBytes,
