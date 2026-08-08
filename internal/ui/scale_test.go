@@ -1,7 +1,7 @@
 package ui_test
 
 import (
-	"fmt"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -9,41 +9,14 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
-	"github.com/alonshuld/grpctui/internal/grpcclient"
+	"github.com/alonshuld/grpctui/internal/testschema"
 	"github.com/alonshuld/grpctui/internal/ui"
 )
 
 // v1.0 promised grpctui stays responsive against a service with a large schema.
 // The panels are measured in internal/ui/panels; this is the whole frame, which
-// is what bubbletea redraws on every single keystroke.
-//
-// 300 services of 10 methods is larger than any real API surface the author has
-// met, and 3,300 rows once the tree expands them all.
-const (
-	bigServices = 300
-	bigMethods  = 10
-)
-
-func bigSchema() []grpcclient.Service {
-	services := make([]grpcclient.Service, 0, bigServices)
-	for s := range bigServices {
-		name := fmt.Sprintf("big.v1.Service%03d", s)
-
-		methods := make([]grpcclient.Method, 0, bigMethods)
-		for m := range bigMethods {
-			method := fmt.Sprintf("Method%02d", m)
-			methods = append(methods, grpcclient.Method{
-				Name:            method,
-				FullName:        name + "." + method,
-				InputType:       name + ".Request",
-				OutputType:      name + ".Reply",
-				ServerStreaming: m%3 == 0,
-			})
-		}
-		services = append(services, grpcclient.Service{Name: name, Methods: methods})
-	}
-	return services
-}
+// is what bubbletea redraws on every single keystroke. Both suites build the
+// schema from internal/testschema, so both are measuring the same thing.
 
 // bigModel is a model that has discovered a large schema and is showing it.
 //
@@ -55,7 +28,7 @@ func bigModel(tb testing.TB) ui.Model {
 	tb.Helper()
 
 	client := healthyClient()
-	client.services = bigSchema()
+	client.services = testschema.Big()
 	return settled(tb, ui.New(client, ui.WithLogger(zap.NewNop())))
 }
 
@@ -67,11 +40,11 @@ func TestModel_LargeSchemaIsUsable(t *testing.T) {
 
 	frame := m.View()
 	require.NotEmpty(t, frame)
-	assert.Contains(t, frame, "big.v1.Service000")
+	assert.Contains(t, frame, testschema.ServiceName(0))
 
 	// A frame is a screenful whatever the schema holds — the tree renders what
 	// fits, not what it has.
-	assert.LessOrEqual(t, len(splitLines(frame)), termHeight+1)
+	assert.LessOrEqual(t, len(strings.Split(frame, "\n")), termHeight+1)
 
 	// And the far end is reachable: selecting the last method of the last
 	// service builds its form like any other.
@@ -107,7 +80,7 @@ func BenchmarkModel_KeyThenView(b *testing.B) {
 // into the tree, on connect and on every profile switch.
 func BenchmarkModel_Discovery(b *testing.B) {
 	client := healthyClient()
-	client.services = bigSchema()
+	client.services = testschema.Big()
 
 	base := sized(b, ui.New(client, ui.WithLogger(zap.NewNop())))
 	msg := discoveryResult(b, base)
@@ -121,16 +94,4 @@ func BenchmarkModel_Discovery(b *testing.B) {
 func keyPress(m ui.Model, key tea.KeyMsg) tea.Model {
 	next, _ := m.Update(key)
 	return next
-}
-
-func splitLines(frame string) []string {
-	var lines []string
-	start := 0
-	for i, r := range frame {
-		if r == '\n' {
-			lines = append(lines, frame[start:i])
-			start = i + 1
-		}
-	}
-	return append(lines, frame[start:])
 }
