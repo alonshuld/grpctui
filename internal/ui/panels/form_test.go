@@ -713,3 +713,49 @@ func TestForm_MarksPresenceFieldsThatAreUnsetOrEmpty(t *testing.T) {
 			"a field cleared by hand will be sent as an empty value and must say so")
 	})
 }
+
+// Load is how a request comes back out of history or a collection. The pair
+// with Submit is what makes recall lossless.
+func TestForm_Load(t *testing.T) {
+	form := newForm(t)
+
+	form = downTo(t, form, "name")
+	form, _ = pressForm(t, form, "enter", "f", "i", "e", "l", "d", "esc")
+
+	sent := submit(t, form)
+
+	reloaded := newForm(t)
+	reloaded.Load(sent.Request)
+
+	assert.Contains(t, reloaded.View(), "field")
+
+	again := submit(t, reloaded)
+	assert.True(t, proto.Equal(sent.Request, again.Request),
+		"a request loaded back must be the request that was sent")
+}
+
+func TestForm_LoadWithNoMethodSelected(t *testing.T) {
+	form := panels.NewForm(keys.Default(), styles.New())
+	form.SetSize(60, 12)
+
+	assert.NotPanics(t, func() { form.Load(nil) })
+	assert.Contains(t, form.View(), "Select a method to build a request.")
+}
+
+// SetNotice is where a recalled request that will not rebuild explains itself,
+// and it shares the line a failed send writes to.
+func TestForm_SetNotice(t *testing.T) {
+	form := newForm(t)
+	before := form.ContentHeight()
+
+	form.SetNotice("other.v1.Thing.Do is not on this connection.")
+
+	assert.Contains(t, form.View(), "not on this connection")
+	assert.Greater(t, form.ContentHeight(), before,
+		"the notice takes room the response panel has to give back")
+
+	_, ok := form.Submit()
+	require.True(t, ok)
+	assert.NotContains(t, form.View(), "not on this connection",
+		"the next send clears it")
+}

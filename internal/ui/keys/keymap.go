@@ -58,6 +58,28 @@ type KeyMap struct {
 	// step past on the way to the response.
 	Profiles key.Binding
 
+	// HistoryPrev and HistoryNext step through the requests already sent,
+	// filling the form in from each. `[` goes back in time and `]` forward,
+	// which is the direction they point.
+	HistoryPrev key.Binding
+	HistoryNext key.Binding
+
+	// Requests opens the saved-request browser: history and collections in one
+	// searchable list. It is ctrl+r rather than a letter so that it works from
+	// inside a field being edited, where recalling a previous request is exactly
+	// what you want instead of typing the whole thing again — and because that
+	// is the shell's key for the same idea.
+	Requests key.Binding
+
+	// Save puts the request currently in the form into a collection. It is a
+	// capital S so that it cannot be confused with ctrl+s, which sends: the two
+	// keys are one shift apart in the fingers and a world apart in effect.
+	Save key.Binding
+
+	// Filter starts typing a query in the request browser. `/` is what every
+	// pager, editor and TUI in the neighbourhood uses.
+	Filter key.Binding
+
 	Retry key.Binding
 	Help  key.Binding
 	Quit  key.Binding
@@ -155,6 +177,26 @@ func Default() KeyMap {
 			key.WithKeys("p"),
 			key.WithHelp("p", "connections"),
 		),
+		HistoryPrev: key.NewBinding(
+			key.WithKeys("["),
+			key.WithHelp("[", "older request"),
+		),
+		HistoryNext: key.NewBinding(
+			key.WithKeys("]"),
+			key.WithHelp("]", "newer request"),
+		),
+		Requests: key.NewBinding(
+			key.WithKeys("ctrl+r"),
+			key.WithHelp("ctrl+r", "requests"),
+		),
+		Save: key.NewBinding(
+			key.WithKeys("S"),
+			key.WithHelp("S", "save"),
+		),
+		Filter: key.NewBinding(
+			key.WithKeys("/"),
+			key.WithHelp("/", "filter"),
+		),
 		Retry: key.NewBinding(
 			key.WithKeys("r"),
 			key.WithHelp("r", "retry"),
@@ -191,8 +233,11 @@ func (k KeyMap) FullHelp() [][]key.Binding {
 		// Add and Remove edit the request the way send and cancel run it, and
 		// sharing a column with them keeps the bar at five columns: a sixth pushes
 		// it past 100 cells, where the last one is truncated away entirely.
-		{k.Add, k.Remove, k.Send, k.EndStream, k.Cancel},
-		{k.NextPanel, k.PrevPanel, k.Profiles},
+		// Recalling and keeping a request sit with sending one: they are the same
+		// subject, and a sixth column would push the bar past 100 cells, where
+		// the last of them is truncated away entirely.
+		{k.Add, k.Remove, k.Send, k.EndStream, k.Cancel, k.Requests, k.Save},
+		{k.NextPanel, k.PrevPanel, k.Profiles, k.HistoryPrev, k.HistoryNext},
 		{k.Retry, k.Help, k.Quit},
 	}
 }

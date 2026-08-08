@@ -138,6 +138,31 @@ func (f *Form) SetMethod(svc grpcclient.Service, m grpcclient.Method) {
 	f.moveTo(0)
 }
 
+// Load fills the form in from a message, which is how a request comes back out
+// of history or a collection.
+//
+// It is called after [Form.SetMethod], on the fresh tree that built: loading
+// into a form somebody has already typed into would merge two requests into one
+// nobody asked for. Nothing is expanded by it — a nested message that came back
+// filled says "set" and a list says how many items it holds, exactly as they do
+// when the user fills them in and collapses them.
+func (f *Form) Load(msg proto.Message) {
+	if !f.selected || msg == nil {
+		return
+	}
+
+	f.schema.Load(msg)
+	f.rows = f.schema.Rows()
+	f.moveTo(0)
+}
+
+// SetNotice puts a line at the foot of the panel. It is the same line a failed
+// build writes to, and it is cleared by the next send.
+func (f *Form) SetNotice(text string) {
+	f.notice = text
+	f.refresh()
+}
+
 // newFieldInput builds the text input rows are edited through.
 func newFieldInput(st styles.Styles) textinput.Model {
 	ti := textinput.New()

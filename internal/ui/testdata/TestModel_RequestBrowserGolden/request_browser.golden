@@ -1,0 +1,24 @@
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                   ╭────────────────────────────────────────────────────────────╮                   
+                   │ Requests (4)                                               │                   
+                   │ filter: press / to search                                  │                   
+                   │                                                            │                   
+                   │ ❯ SayHello      history  demo.v1.Greeter.SayHello · 5m ago │                   
+                   │   Echo          history  demo.v1.Echo.Echo · 3h ago        │                   
+                   │   greet-alice   team     demo.v1.Greeter.SayHello          │                   
+                   │   watch-hellos  team     demo.v1.Greeter.SayHelloStream    │                   
+                   │                                                            │                   
+                   │ enter load · ctrl+s load and send · / filter · esc close   │                   
+                   ╰────────────────────────────────────────────────────────────╯                   
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    

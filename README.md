@@ -7,11 +7,13 @@ browser tab.
 Point it at a gRPC server with reflection enabled and it discovers the entire
 API surface with zero configuration.
 
-> **Status: v0.4 — Metadata & Auth.** Discover a server, fill in a request form
-> generated from the method's input message — nested messages, repeated fields,
-> maps, `oneof` variants and enums included — send the headers a real service
-> wants alongside it, over TLS or mTLS, and switch between saved connections
-> without restarting. Streaming lands in v0.5.
+> **Status: v0.6 — History & Collections.** Discover a server, fill in a request
+> form generated from the method's input message — nested messages, repeated
+> fields, maps, `oneof` variants and enums included — send the headers a real
+> service wants alongside it, over TLS or mTLS, switch between saved connections
+> without restarting, and drive all three streaming shapes. Every call you make
+> is remembered, and the ones worth keeping go into named collections you can
+> commit. Variables and environments land in v0.7.
 
 ## Install
 
@@ -52,6 +54,11 @@ Flags:
                       (default "$XDG_STATE_HOME/grpctui/grpctui.log")
   -log-level string   log level: debug, info, warn, error (default "error")
   -call-timeout d     give up on a single call after this long (default 1m0s)
+  -history-file str   record sent requests here; empty keeps them for the session
+                      (default "$XDG_STATE_HOME/grpctui/history.yaml")
+  -history-limit n    how many sent requests to keep (default 200)
+  -collections dir    read and write saved collections here; empty disables saving
+                      (default "$XDG_CONFIG_HOME/grpctui/collections")
   -version            print the version and exit
 ```
 
@@ -210,6 +217,67 @@ indistinguishable from one nobody opened, so `space` on a message row sends it
 anyway. An item you add to a repeated field is always sent, empty or not — you
 added it on purpose.
 
+## History and collections
+
+Every request you send is recorded. `[` steps back through them and `]` forward,
+filling the form in from each — the tree moves to the method too, so the whole
+screen agrees about what you are looking at. `ctrl+s` sends whatever is on
+screen, so re-running yesterday's call is two keystrokes.
+
+`ctrl+r` opens the browser: history and the saved collections in one list.
+It works from inside a half-typed field, which is when you most often want it.
+
+| Key | In the browser |
+| --- | --- |
+| `enter` | Load the request into the form |
+| `ctrl+s` | Load it and send it |
+| `/` | Filter; `enter` keeps the query, `esc` abandons it |
+| `esc` | Clear the filter, or close the browser |
+
+The filter matches method names, saved names, the source column, and **field
+content** — which is how you actually find a call again, since you remember the
+account id you passed rather than that it was the fourth `SayHello` of the
+afternoon. Every whitespace-separated term has to match, in any order.
+
+`S` saves whatever is in the form into a collection, under
+`collection/name` — a bare name goes to `default`. Saving over a name replaces
+that entry, so saving under a new one is how you duplicate a request you have
+just edited. A form with errors shows them instead of opening the prompt.
+
+History lives in `$XDG_STATE_HOME/grpctui/history.yaml` and is capped; nobody is
+meant to open it. Collections are yours:
+
+```yaml
+# ~/.config/grpctui/collections/team.yaml
+requests:
+  - name: greet-alice
+    method: demo.v1.Greeter.SayHello
+    kind: unary
+    headers:
+      - x-tenant
+    body:
+      name: alice
+      times: 2
+```
+
+The body is ordinary nested YAML rather than an escaped JSON blob, so a
+collection diffs cleanly and belongs in a repository beside the service it
+calls. grpctui only ever adds or replaces a whole entry, and only in the one
+file you saved to — a comment you wrote above a request survives being edited
+from the TUI.
+
+**A record carries header names and never header values.** A history file sits
+in your state directory for weeks and a collection is meant to be committed, so
+neither is somewhere a bearer token may end up. Recalling a request therefore
+restores its shape and leaves the credentials to the connection; if it went out
+with a header the current connection is not sending, the form says which.
+
+A collection outlives the schema it was written against. A body naming a field
+that has since been renamed is reported rather than skipped — a request quietly
+sent without the field you thought you had set is the failure this whole feature
+exists to prevent. So is a history or collection file that will not parse: it
+stops startup instead of being silently replaced by the next send.
+
 ## Keybindings
 
 | Key | Action |
@@ -222,17 +290,23 @@ added it on purpose.
 | `enter` | Toggle a service, select a method, edit a field, or open a field that holds others |
 | `space` | Toggle a `bool`, pick an enum value or a `oneof` variant, send an empty message, park a header |
 | `a`, `d` | Add / remove an item of a repeated or map field, or a header |
-| `ctrl+s` | Send the request |
-| `esc` | Stop editing a field, cancel a call in flight, or close the connection switcher |
+| `ctrl+s` | Send the request, or load and send the one under the cursor in the browser |
+| `ctrl+e` | Close the sending half of a stream |
+| `esc` | Stop editing a field, cancel a call in flight, or close a modal |
 | `tab`, `shift+tab` | Switch panel |
 | `p` | Open the connection switcher |
+| `[`, `]` | Step back / forward through the requests already sent |
+| `ctrl+r` | Open the saved-request browser |
+| `S` | Save the current request into a collection |
+| `/` | Filter, in the browser |
 | `r` | Retry after a failed connection |
 | `?` | Toggle the full help |
 | `q` | Quit |
 | `ctrl+c` | Quit, even mid-edit |
 
 While a field is being edited every key is a character — `q` types a `q`. Only
-`ctrl+c`, `ctrl+s` and the panel switches keep their meaning.
+`ctrl+c`, `ctrl+s`, `ctrl+e`, `ctrl+r` and the panel switches keep their
+meaning.
 
 ## Development
 
@@ -252,6 +326,7 @@ The codebase is four strictly one-directional layers — transport → domain �
 | `internal/grpcclient` | Dial, TLS/mTLS, credentials, reflection discovery, dynamic invoke |
 | `internal/protoschema` | Descriptor → form-field tree; values → wire message |
 | `internal/config` | `~/.config/grpctui/config.yaml`, connection profiles |
+| `internal/requests` | Sent-request history and saved collections on disk |
 | `internal/ui` | bubbletea models, panels, keymap, styles |
 | `cmd/grpctui` | Flags, config, `tea.Program` bootstrap |
 

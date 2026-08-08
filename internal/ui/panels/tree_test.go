@@ -272,3 +272,46 @@ func TestTree_PagesThroughTheList(t *testing.T) {
 	tree, _ = press(t, tree, "ctrl+u", "ctrl+u", "ctrl+u")
 	assert.Contains(t, tree.View(), "❯ ▾ demo.v1.Greeter", "paging up should stop at the top")
 }
+
+// SelectMethod is how a request recalled out of history moves the tree, so that
+// the whole screen agrees about which method is on show.
+func TestTree_SelectMethod(t *testing.T) {
+	tree := newTree(t)
+
+	svc, method, ok := tree.SelectMethod("demo.v1.Echo.Echo")
+	require.True(t, ok)
+	assert.Equal(t, "demo.v1.Echo", svc.Name)
+	assert.Equal(t, "demo.v1.Echo.Echo", method.FullName)
+
+	_, selected, ok := tree.Selection()
+	require.True(t, ok, "the cursor must be on the method, not merely near it")
+	assert.Equal(t, "demo.v1.Echo.Echo", selected.FullName)
+}
+
+func TestTree_SelectMethodExpandsTheService(t *testing.T) {
+	tree := newTree(t)
+
+	// Fold everything away, so the method is not on screen to begin with.
+	tree, _ = press(t, tree, "h")
+	tree, _ = press(t, tree, "G", "h")
+	require.NotContains(t, tree.View(), "SayHelloStream")
+
+	_, _, ok := tree.SelectMethod("demo.v1.Greeter.SayHelloStream")
+	require.True(t, ok)
+
+	assert.Contains(t, tree.View(), "SayHelloStream")
+	_, selected, ok := tree.Selection()
+	require.True(t, ok)
+	assert.Equal(t, "demo.v1.Greeter.SayHelloStream", selected.FullName)
+}
+
+// A request recorded against another server names a method this connection does
+// not have, and the tree must say so rather than moving somewhere arbitrary.
+func TestTree_SelectMethodThatIsNotThere(t *testing.T) {
+	tree := newTree(t)
+	before := tree.View()
+
+	_, _, ok := tree.SelectMethod("other.v1.Thing.Do")
+	assert.False(t, ok)
+	assert.Equal(t, before, tree.View())
+}

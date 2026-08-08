@@ -5,7 +5,29 @@ import (
 
 	"github.com/alonshuld/grpctui/internal/grpcclient"
 	"github.com/alonshuld/grpctui/internal/protoschema"
+	"github.com/alonshuld/grpctui/internal/requests"
 )
+
+// historySavedMsg reports whether history reached the disk. Writing it is
+// ordinary file I/O, which Update must not do, and it is a convenience rather
+// than part of the call: a failure is logged and never shown.
+type historySavedMsg struct {
+	err error
+}
+
+// requestSavedMsg carries the outcome of writing a request into a collection,
+// along with the updated set — [requests.Collections.Save] both writes the file
+// and records the entry, and the write happens in a command, so the result has
+// to travel back to the model.
+type requestSavedMsg struct {
+	collections requests.Collections
+
+	// collection and name say where it went, for the prompt's next suggestion.
+	collection string
+	name       string
+
+	err error
+}
 
 // servicesDiscoveredMsg carries the result of a successful reflection sweep.
 type servicesDiscoveredMsg struct {

@@ -13,12 +13,12 @@
 ┃                                      ┃│                                                          │
 ┃                                      ┃│                                                          │
 ┃                                      ┃│                                                          │
-┃                                      ┃│                                                          │
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛╰──────────────────────────────────────────────────────────╯
  localhost:50051  •  2 services  •  5 methods 
-↑/k    up           enter select/edit     a      add item       tab       next panel     r retry
-↓/j    down         →/l   expand          d      remove item    shift+tab prev panel     ? help 
-ctrl+u page up      ←/h   collapse        ctrl+s send           p         connections    q quit 
-ctrl+d page down    space toggle          ctrl+e end sending                                    
-g      top          H     scroll left     esc    cancel                                         
-G      bottom       L     scroll right                                                          
+↑/k    up           enter select/edit     a      add item       tab       next panel       r retry
+↓/j    down         →/l   expand          d      remove item    shift+tab prev panel       ? help 
+ctrl+u page up      ←/h   collapse        ctrl+s send           p         connections      q quit 
+ctrl+d page down    space toggle          ctrl+e end sending    [         older request           
+g      top          H     scroll left     esc    cancel         ]         newer request           
+G      bottom       L     scroll right    ctrl+r requests                                         
+                                          S      save                                             
