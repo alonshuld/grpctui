@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+
+	"github.com/alonshuld/grpctui/internal/format"
 )
 
 // DefaultLimit is how many sent requests history keeps. It is a working set,
@@ -31,9 +33,11 @@ type History struct {
 
 // historyFile is the on-disk shape. It is a struct rather than a bare list so
 // that the file can grow a field later without every existing history becoming
-// unparseable.
+// unparseable — and since v1.0 it carries the format version that says which
+// fields to expect.
 type historyFile struct {
-	Requests []Request `yaml:"requests"`
+	Version  format.Version `yaml:"version"`
+	Requests []Request      `yaml:"requests"`
 }
 
 // DefaultHistoryFile reports the default history path,
@@ -120,7 +124,7 @@ func (h History) Save() error {
 	if h.Path == "" {
 		return nil
 	}
-	return writeYAML(h.Path, historyFile{Requests: h.entries})
+	return writeYAML(h.Path, historyFile{Version: format.Current, Requests: h.entries})
 }
 
 func (h History) limit() int {

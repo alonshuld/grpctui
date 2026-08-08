@@ -130,3 +130,19 @@ func TestCallTimingResultOnNil(t *testing.T) {
 	var collector *callTiming
 	assert.Equal(t, Timing{}, collector.result())
 }
+
+// Connection events are deliberately ignored: they arrive on the connection's
+// own context rather than on any call's, so there is nothing to attribute them
+// to. Pinning that they are a no-op is the difference between "decided" and
+// "forgotten".
+func TestStatsHandlerIgnoresConnectionEvents(t *testing.T) {
+	h := statsHandler{}
+
+	ctx := h.TagConn(context.Background(), &stats.ConnTagInfo{})
+	assert.Equal(t, context.Background(), ctx)
+
+	assert.NotPanics(t, func() {
+		h.HandleConn(context.Background(), &stats.ConnBegin{})
+		h.HandleConn(context.Background(), &stats.ConnEnd{})
+	})
+}

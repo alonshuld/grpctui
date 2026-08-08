@@ -7,28 +7,37 @@ browser tab.
 Point it at a gRPC server with reflection enabled and it discovers the entire
 API surface with zero configuration.
 
-> **Status: v0.9 — Polish & Extensibility.** Discover a server, fill in a
-> request form generated from the method's input message — nested messages,
-> repeated fields, maps, `oneof` variants and enums included — send the headers a
-> real service wants alongside it, over TLS or mTLS, switch between saved
-> connections without restarting, and drive all three streaming shapes. Every
-> call you make is remembered, and the ones worth keeping go into named
-> collections you can commit. Write `{{variable}}` anywhere in a request, switch
-> environments to change what it means, and capture a value out of one response
-> to use in the next. When an answer surprises you, read the bytes it arrived
-> as, diff it against the last one, or see where its time went — and put a
-> passive proxy in front of somebody else's client to watch what it sends.
-> Themes, a `.proto` fallback for servers without reflection, remappable keys,
-> shell completions and a headless mode for CI round it off. v1.0 is next.
+> **Status: v1.0 — Stable.** Discover a server, fill in a request form
+> generated from the method's input message — nested messages, repeated fields,
+> maps, `oneof` variants and enums included — send the headers a real service
+> wants alongside it, over TLS or mTLS, switch between saved connections without
+> restarting, and drive all three streaming shapes. Every call you make is
+> remembered, and the ones worth keeping go into named collections you can
+> commit. Write `{{variable}}` anywhere in a request, switch environments to
+> change what it means, and capture a value out of one response to use in the
+> next. When an answer surprises you, read the bytes it arrived as, diff it
+> against the last one, or see where its time went — and put a passive proxy in
+> front of somebody else's client to watch what it sends. Themes, a `.proto`
+> fallback for servers without reflection, remappable keys, shell completions
+> and a headless mode for CI round it off.
+>
+> The config file and the collection format are
+> [documented and versioned](docs/formats.md) from here on: within a format
+> version, a file that works today keeps working.
 
 ## Install
 
 ```bash
-go install github.com/alonshuld/grpctui/cmd/grpctui@latest
+brew install alonshuld/tap/grpctui                            # macOS and Linux
+go install github.com/alonshuld/grpctui/cmd/grpctui@latest    # any Go toolchain
 ```
 
 Prebuilt binaries for Linux, macOS, and Windows are attached to each
-[GitHub Release](https://github.com/alonshuld/grpctui/releases).
+[GitHub Release](https://github.com/alonshuld/grpctui/releases) — a single
+static binary with no runtime dependencies, so unpacking one onto `$PATH` is the
+third route.
+
+Then `grpctui <host:port>`, and press `?` for the keys.
 
 ## Usage
 
@@ -44,11 +53,12 @@ cannot represent — one carrying a `google.protobuf.Any` whose payload type the
 server never described — is shown in protobuf's text format instead, labelled
 as such, rather than reported as a failed call.
 
-There are three forms of the command:
+There are four forms of the command:
 
 ```
 grpctui [flags] <host:port>        explore a target interactively
 grpctui run [flags] <collection>   replay a saved collection, no UI
+grpctui keys                       print the keybinding reference, yours included
 grpctui completion <shell>         print a completion script
 ```
 
@@ -534,6 +544,17 @@ the names *your* config file defines — as does the collection argument to
 
 ## Keybindings
 
+The keys worth learning first are below. The complete reference — every binding,
+grouped, with the name each one goes by in the config file — is
+[docs/keybindings.md](docs/keybindings.md), generated from the keymap itself so
+it cannot fall behind it.
+
+If you have remapped anything, read your own instead:
+
+```bash
+grpctui keys
+```
+
 | Key | Action |
 | --- | --- |
 | `↑`/`k`, `↓`/`j` | Move the cursor |
@@ -570,6 +591,29 @@ While a field is being edited every key is a character — `q` types a `q`. Only
 `ctrl+c`, `ctrl+s`, `ctrl+e`, `ctrl+r`, `ctrl+p` and the panel switches keep
 their meaning.
 
+## Demos
+
+Three recordings, one per workflow worth seeing before you try it:
+
+| Workflow | What it shows |
+| --- | --- |
+| A first call | Discovery with nothing configured, a generated form, a response |
+| Streaming | A server-streaming call arriving live, and `esc` ending the watch |
+| Collections | Saving a request, finding it in the browser, replaying it |
+
+They are recorded from the tapes in [docs/demos](docs/demos), against a real
+server — `make demos` re-records all three, so a demo that goes stale is
+regenerated rather than restaged. See
+[docs/demos/README.md](docs/demos/README.md) for what they need.
+
+## Documentation
+
+| Page | What is in it |
+| --- | --- |
+| [docs/formats.md](docs/formats.md) | The config, collection and history file formats, and the compatibility promise |
+| [docs/keybindings.md](docs/keybindings.md) | Every keybinding and the name it is remapped by |
+| [docs/demos](docs/demos) | The tapes the README's recordings are made from |
+
 ## Development
 
 ```bash
@@ -577,6 +621,8 @@ make hooks        # install the pre-push hook — do this first
 make test         # go test ./...
 make check        # everything CI enforces: fmt, vet, lint, build, race tests
 make golden       # regenerate teatest golden files (review the diff!)
+make docs         # regenerate docs/keybindings.md from the keymap
+make demos        # re-record the README GIFs (needs vhs)
 make run TARGET=localhost:50051
 ```
 
@@ -591,6 +637,7 @@ The codebase is four strictly one-directional layers — transport → domain �
 | `internal/proxy` | Passive mode: a schema-free proxy that reports what goes past |
 | `internal/config` | `~/.config/grpctui/config.yaml`, profiles, environments, themes, keys |
 | `internal/requests` | Sent-request history and saved collections on disk |
+| `internal/format` | The `version:` on every file grpctui reads, and what an unknown one means |
 | `internal/vars` | Variables, environments, `{{name}}` interpolation |
 | `internal/diff` | Line diff, for comparing one response against the previous |
 | `internal/export` | A request rendered as an equivalent `grpcurl` command |

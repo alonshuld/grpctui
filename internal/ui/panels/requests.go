@@ -216,7 +216,7 @@ func (r *Requests) resizeInput() {
 	if r.mode == requestsSave {
 		prompt = savePrompt
 	}
-	r.input.Width = max(r.inner()-lipgloss.Width(prompt)-1, minValueWidth)
+	r.input.Width = max(r.layout().inner-lipgloss.Width(prompt)-1, minValueWidth)
 }
 
 // Update handles the browser's keys while it is open.
@@ -419,16 +419,23 @@ const (
 // otherwise every character typed into the filter resizes it as the list
 // narrows, and a modal that jumps about under the cursor is unreadable.
 func (r Requests) View() string {
+	// The geometry is measured once and handed down, rather than recomputed by
+	// every line that needs it. Each of the three widths is a pass over every
+	// entry, and a browser holding a full history redrew itself in tens of
+	// milliseconds when each of a screenful of rows asked for them again — which
+	// is a modal that visibly lags behind the key you pressed.
+	l := r.layout()
+
 	// lipgloss counts padding inside Width, so the box is asked for the content
 	// width plus it — otherwise the widest row is a cell or two too long and
 	// wraps onto a line of its own.
-	box := r.styles.Panel.Width(r.inner() + r.styles.Panel.GetHorizontalPadding())
+	box := r.styles.Panel.Width(l.inner + r.styles.Panel.GetHorizontalPadding())
 
 	if r.mode == requestsSave {
-		return box.Render(strings.Join(r.saveLines(), "\n"))
+		return box.Render(strings.Join(r.saveLines(l), "\n"))
 	}
 
-	lines := []string{r.styles.PanelTitle.Render(r.title()), r.filterLine(), ""}
+	lines := []string{r.styles.PanelTitle.Render(r.title()), r.filterLine(l), ""}
 
 	switch {
 	case len(r.entries) == 0:
@@ -438,7 +445,7 @@ func (r Requests) View() string {
 	default:
 		visible := min(r.visibleRows(), len(r.visible)-r.offset)
 		for i := r.offset; i < r.offset+visible; i++ {
-			lines = append(lines, r.row(i))
+			lines = append(lines, r.row(i, l))
 		}
 	}
 
@@ -446,27 +453,51 @@ func (r Requests) View() string {
 	return box.Render(strings.Join(lines, "\n"))
 }
 
-// inner is the box's content width: enough for the widest row it could show,
-// bounded by the screen.
+// layout is the browser's geometry for one frame: the box's content width and
+// the width of the two fixed columns inside it.
 //
-// It is measured against every entry rather than the visible ones, so that
-// filtering narrows the list without moving the walls around it.
-func (r Requests) inner() int {
-	want := max(minBoxWidth, lipgloss.Width(listHint))
-	for _, e := range r.entries {
-		want = max(want, r.rowWidth(e))
-	}
-	return min(want, r.available())
+// It is a value computed once per View rather than three methods called
+// wherever a width is wanted. That is not tidiness: each width is a pass over
+// every entry, and a width asked for inside a loop over the entries is a
+// quadratic frame.
+type layout struct {
+	inner  int
+	label  int
+	source int
 }
 
-// rowWidth is how wide one row would like to be, unstyled.
-func (r Requests) rowWidth(e entry) int {
-	const gaps = 2 + 2 + 2 // the cursor gutter and one gap per column
-	return gaps + r.labelWidth() + r.sourceWidth() + lipgloss.Width(r.describe(e.request))
+// layout measures the browser against everything it holds.
+//
+// The width comes from every entry rather than the visible ones, so that
+// filtering narrows the list without moving the walls around it.
+func (r Requests) layout() layout {
+	l := layout{
+		inner:  max(minBoxWidth, lipgloss.Width(listHint)),
+		label:  1,
+		source: len(historySource),
+	}
+
+	// One pass, not three. The two column widths are the same on every row, so
+	// the widest row is the widest description plus them — no second walk needed
+	// once the maximum description is known.
+	describe := 0
+	for _, e := range r.entries {
+		l.label = max(l.label, len(e.request.Label()))
+		l.source = max(l.source, len(e.source))
+		describe = max(describe, lipgloss.Width(r.describe(e.request)))
+	}
+	l.label = min(l.label, maxNameWidth)
+	l.source = min(l.source, maxTypeWidth)
+
+	// The cursor gutter and one gap per column, the same on every row.
+	const gaps = 2 + 2 + 2
+	l.inner = min(max(l.inner, gaps+l.label+l.source+describe), r.available())
+
+	return l
 }
 
 // saveLines renders the destination prompt.
-func (r Requests) saveLines() []string {
+func (r Requests) saveLines(l layout) []string {
 	lines := []string{
 		r.styles.PanelTitle.Render("Save request"),
 		"",
@@ -475,11 +506,11 @@ func (r Requests) saveLines() []string {
 
 	if names := r.collections.Names(); len(names) > 0 {
 		lines = append(lines, "",
-			styles.Truncate(r.styles.Muted.Render("collections: "+strings.Join(names, ", ")), r.inner()))
+			styles.Truncate(r.styles.Muted.Render("collections: "+strings.Join(names, ", ")), l.inner))
 	}
 
 	if r.notice != "" {
-		lines = append(lines, "", r.noticeLine())
+		lines = append(lines, "", r.noticeLine(l))
 	}
 	return append(lines, "", r.styles.Hint.Render(saveHint))
 }
@@ -493,40 +524,40 @@ func (r Requests) title() string {
 	return fmt.Sprintf("Requests (%d)", len(r.entries))
 }
 
-func (r Requests) filterLine() string {
+func (r Requests) filterLine(l layout) string {
 	prompt := r.styles.Label.Render(filterPrompt)
 
 	if r.mode == requestsFilter {
-		return styles.Truncate(prompt+r.input.View(), r.inner())
+		return styles.Truncate(prompt+r.input.View(), l.inner)
 	}
 	if r.query == "" {
-		return styles.Truncate(prompt+r.styles.FieldDisabled.Render("press / to search"), r.inner())
+		return styles.Truncate(prompt+r.styles.FieldDisabled.Render("press / to search"), l.inner)
 	}
-	return styles.Truncate(prompt+r.styles.FieldValue.Render(r.query), r.inner())
+	return styles.Truncate(prompt+r.styles.FieldValue.Render(r.query), l.inner)
 }
 
 // noticeLine reports the outcome of the last save. Only the save prompt ever
 // shows one: a save that worked closes the browser, and one that did not keeps
 // the prompt up so the name can be corrected — see [Requests.SetNotice].
-func (r Requests) noticeLine() string {
+func (r Requests) noticeLine(l layout) string {
 	style := r.styles.Hint
 	if r.failed {
 		style = r.styles.FieldError
 	}
-	return styles.Truncate(style.Render(r.notice), r.inner())
+	return styles.Truncate(style.Render(r.notice), l.inner)
 }
 
-func (r Requests) row(i int) string {
+func (r Requests) row(i int, l layout) string {
 	e := r.entries[r.visible[i]]
 
-	label := r.styles.Method.Render(padCell(e.request.Label(), r.labelWidth()))
-	source := r.styles.Service.Render(padCell(e.source, r.sourceWidth()))
+	label := r.styles.Method.Render(padCell(e.request.Label(), l.label))
+	source := r.styles.Service.Render(padCell(e.source, l.source))
 	text := label + "  " + source + "  " + r.styles.Muted.Render(r.describe(e.request))
 
 	if i != r.cursor {
-		return styles.Truncate("  "+text, r.inner())
+		return styles.Truncate("  "+text, l.inner)
 	}
-	return r.styles.Cursor.Render(styles.Truncate("❯ "+text, r.inner()))
+	return r.styles.Cursor.Render(styles.Truncate("❯ "+text, l.inner))
 }
 
 // describe is the muted right-hand column: the method the request calls and how
@@ -557,22 +588,6 @@ func ago(d time.Duration) string {
 		days := int(d.Hours() / 24)
 		return fmt.Sprintf("%d %s ago", days, plural(days, "day"))
 	}
-}
-
-func (r Requests) labelWidth() int {
-	w := 0
-	for _, e := range r.entries {
-		w = max(w, len(e.request.Label()))
-	}
-	return min(max(w, 1), maxNameWidth)
-}
-
-func (r Requests) sourceWidth() int {
-	w := len(historySource)
-	for _, e := range r.entries {
-		w = max(w, len(e.source))
-	}
-	return min(w, maxTypeWidth)
 }
 
 // available is the widest the box's contents may be on this screen.

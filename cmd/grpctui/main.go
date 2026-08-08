@@ -190,6 +190,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return runCollection(args[1:], stdout, stderr)
 		case cmdCompletion:
 			return completion(args[1:], stdout, stderr)
+		case cmdKeys:
+			return printKeys(args[1:], stdout, stderr)
 		case cmdComplete:
 			return completeValues(args[1:], stdout)
 		}
@@ -685,7 +687,7 @@ func newFlagSet(name string, opts *options, stderr io.Writer) *flag.FlagSet {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	registerFlags(fs, opts)
-	if name != "grpctui" {
+	if name == "grpctui "+cmdRun {
 		registerRunFlags(fs, opts)
 	}
 
