@@ -250,30 +250,35 @@ func TestStream_SendAfterTheCallDied(t *testing.T) {
 		"Recv holds the reason, and a killed server is not 'the stream ended cleanly'")
 }
 
-// TestStream_SendReportsATransportFailure covers the other branch of the same
-// send: an error that is not io.EOF is wrapped with the method, because that
-// one *is* the reason and the user is looking at a panel that has to say so.
-func TestStream_SendReportsATransportFailure(t *testing.T) {
+// TestStream_SendWrapsANonEOFFailure covers the other branch of the same send:
+// an error that is *not* io.EOF is wrapped with the method name, because that
+// one is the reason itself and the panel showing it has to say which call it
+// belongs to.
+//
+// It provokes the branch by sending twice on a server-streaming method, where
+// grpc-go has already closed the sending half after the one request the shape
+// allows. That is the only reliable way to get a non-EOF error out of Send —
+// killing the transport yields io.EOF, which is the other branch.
+//
+// It deliberately asserts nothing about what Recv says afterwards. A failed
+// SendMsg finishes the client stream with the client's own error, so Recv
+// reports that rather than the server's PermissionDenied — an artefact of the
+// misuse, not behaviour worth pinning. That the server's status survives a
+// stream is stream_test.go's job, against a call nobody has misused.
+func TestStream_SendWrapsANonEOFFailure(t *testing.T) {
 	ts := startTestServer(t, withStreamer())
 	c := ts.client(t)
 	method := streamerMethod(t, "Fail")
+	require.Equal(t, grpcclient.KindServerStreaming, method.Kind())
 
 	s := openStream(t, c, method, nil)
 	require.NoError(t, s.Send(item(t, method, "one")))
 
-	// Fail is server-streaming: grpc-go closed the sending half after the one
-	// request the shape allows, so a second send is refused by the library
-	// rather than by the wire.
 	err := s.Send(item(t, method, "two"))
 
 	require.Error(t, err)
-	require.NotErrorIs(t, err, io.EOF)
-	require.ErrorContains(t, err, method.FullName)
-
-	_, recvErr := drain(t, s)
-	st, ok := grpcclient.StatusOf(recvErr)
-	require.True(t, ok, "the server's own failure still survives to the caller: %v", recvErr)
-	assert.Equal(t, uint32(codes.Internal), st.Code)
+	require.NotErrorIs(t, err, io.EOF, "this one is a reason, not 'go and read Recv'")
+	assert.ErrorContains(t, err, method.FullName)
 }
 
 // TestStream_SendAfterCloseSend pins the other refusal, which is grpctui's own
