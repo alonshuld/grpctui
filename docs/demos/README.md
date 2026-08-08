@@ -1,8 +1,9 @@
 # Demo recordings
 
-The three GIFs in the README are recorded from the `.tape` files here with
+The `.tape` files here record grpctui with
 [VHS](https://github.com/charmbracelet/vhs), so a demo that goes out of date is
-re-recorded rather than re-staged:
+re-recorded rather than re-staged. The GIFs themselves are not committed —
+`make demos` writes them beside the tapes, and `.gitignore` keeps them out:
 
 ```bash
 go install github.com/charmbracelet/vhs@latest   # needs ffmpeg and ttyd

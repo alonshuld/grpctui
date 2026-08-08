@@ -53,7 +53,10 @@ Type "/"
 Sleep 600ms
 Type "health"
 Sleep 1500ms
-Escape
+# enter settles on the filter, keeping the narrowed list and the cursor on the
+# first match. Escape here would abandon the search and put the cursor back at
+# the top of the whole list, and the recall below would load something else.
+Enter
 Sleep 800ms
 
 # enter recalls it into the form — ctrl+s would send it outright.
