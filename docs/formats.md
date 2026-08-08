@@ -47,6 +47,30 @@ written in format version 2 and this grpctui reads up to 1: upgrade grpctui
 Unknown keys are otherwise an error. A silently ignored `methd:` is how a
 request goes out without the header you thought you had written.
 
+### Going back to a grpctui older than v1.0
+
+The promise above is forwards. Backwards there is one sharp edge, and it is
+worth knowing before you hit it.
+
+`version:` arrived in v1.0, and v1.0 writes it: on the history after every send,
+and on a collection every time you save one. A grpctui from before v1.0 has
+never heard of the key, and unknown keys are an error — so once v1.0 has
+written a file, the older binary refuses to start on it:
+
+```
+grpctui: parse "/home/you/.local/state/grpctui/history.yaml": yaml: unmarshal
+errors: line 1: field version not found in type requests.historyFile
+```
+
+Deleting the `version:` line from the file is the whole fix; deleting the
+history file itself works too, and costs you only the list of what you have
+already sent. Nothing else about the file changed in v1.0, so a collection with
+that one line removed is a v0.9 collection again.
+
+This is the only version of grpctui the problem applies to: v1.0 and everything
+after it reads a file with no version as the current format, so a file that has
+been back through an older binary loads again with nothing to fix.
+
 ## What is never written down
 
 A bearer token, a basic-auth password and a header value never reach a

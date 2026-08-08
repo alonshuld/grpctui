@@ -90,6 +90,8 @@ func TestLoadCollections_LaterVersion(t *testing.T) {
 	require.ErrorIs(t, err, format.ErrUnsupported)
 	require.ErrorContains(t, err, "upgrade grpctui")
 	require.ErrorContains(t, err, "future.yaml", "the error has to name which of the files in the directory it is")
+	require.ErrorContains(t, err, "collection ",
+		"a path alone does not say which kind of file this is, and docs/formats.md quotes the message")
 	assert.NotContains(t, err.Error(), "retries",
 		"the unknown key is a symptom of the version, and naming it sends the reader after the wrong thing")
 }
@@ -105,6 +107,8 @@ func TestLoadHistory_LaterVersion(t *testing.T) {
 	// Quoted, as every path in an error from this package is — on Windows that
 	// is not the same string as the path, since %q doubles the separators.
 	require.ErrorContains(t, err, strconv.Quote(path))
+	require.ErrorContains(t, err, "history ",
+		"grpctui wrote this file itself, and a message that could equally be about a collection hides that")
 }
 
 // TestLoadCollections_UnknownKeyWithoutAVersionStillFails pins that the version

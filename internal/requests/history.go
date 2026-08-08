@@ -65,7 +65,7 @@ func LoadHistory(path string, limit int) (History, error) {
 	}
 
 	var file historyFile
-	if err := readYAML(path, &file); err != nil {
+	if err := readYAML(historyKind, path, &file); err != nil {
 		return History{}, err
 	}
 
