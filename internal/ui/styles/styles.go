@@ -59,6 +59,12 @@ type Styles struct {
 	FieldDisabled lipgloss.Style
 	FieldError    lipgloss.Style
 
+	// FieldRef is a value that is a {{variable}} reference rather than the
+	// value itself. It differs from an ordinary value because what the row shows
+	// is not what the server will see, and a form where those look identical is
+	// one where you cannot tell a template from a literal at a glance.
+	FieldRef lipgloss.Style
+
 	StatusOK    lipgloss.Style
 	StatusError lipgloss.Style
 
@@ -120,6 +126,7 @@ func New() Styles {
 		FieldValue:    lipgloss.NewStyle().Foreground(p.Secondary),
 		FieldDisabled: lipgloss.NewStyle().Foreground(p.Muted).Italic(true),
 		FieldError:    lipgloss.NewStyle().Foreground(p.Error),
+		FieldRef:      lipgloss.NewStyle().Foreground(p.Primary).Italic(true),
 
 		StatusOK:    lipgloss.NewStyle().Bold(true).Foreground(p.Success),
 		StatusError: lipgloss.NewStyle().Bold(true).Foreground(p.Error),

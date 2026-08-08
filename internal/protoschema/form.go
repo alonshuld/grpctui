@@ -62,6 +62,27 @@ type EnumValue struct {
 	Number int32
 }
 
+// Resolver expands the variable references a form value may contain.
+// internal/vars implements it; a form without one sends every value exactly as
+// it was typed.
+//
+// It is an interface rather than an import so that this package keeps knowing
+// about protobuf and nothing else. What a reference looks like is the
+// resolver's business, which is why [Resolver.Refers] is part of the contract
+// and not a pattern match here.
+type Resolver interface {
+	// Resolve returns text with every reference replaced. A reference nothing
+	// binds is an error: a request that quietly loses a value fails somewhere
+	// far from the mistake.
+	Resolve(text string) (string, error)
+
+	// Refers reports whether text contains a reference at all. A value that does
+	// is not checked against its field's type until it has been resolved —
+	// "{{count}}" is not a number yet, and saying so while it is being typed
+	// would be a complaint about the wrong thing.
+	Refers(text string) bool
+}
+
 // Form is the editable shape of one request message.
 //
 // A Form is a handle onto a mutable tree, so copying it shares the tree rather
@@ -125,6 +146,12 @@ type Node struct {
 
 	// active is the variant a [KindOneof] row will send, if any.
 	active *Node
+
+	// resolver expands the variable references in every value under this row.
+	// Only the root ever carries one — see [Node.resolverFor] — so that
+	// installing one is a single assignment and a tree cannot end up half
+	// resolved.
+	resolver Resolver
 }
 
 // NewForm derives the form for a request message. A nil descriptor yields the
@@ -159,6 +186,37 @@ func (f Form) Rows() []*Node {
 // Root returns the message row every other row hangs off. It is the form's
 // handle on itself, and is nil for a form with no descriptor.
 func (f Form) Root() *Node { return f.root }
+
+// SetResolver installs the expansion applied to every value on its way to the
+// wire. A nil resolver turns interpolation off, which is what a form built
+// before the variables were known has.
+//
+// It is set on the tree rather than on the Form, so that it survives the Form
+// being copied — which happens on every keystroke, since the panel holding one
+// is a bubbletea value model — and so that a row can find it from anywhere in
+// the tree without a second handle back to the form.
+func (f Form) SetResolver(r Resolver) {
+	if f.root != nil {
+		f.root.resolver = r
+	}
+}
+
+// resolverFor returns the expansion in force for this row.
+func (n *Node) resolverFor() Resolver {
+	for c := n; c != nil; c = c.parent {
+		if c.resolver != nil {
+			return c.resolver
+		}
+	}
+	return nil
+}
+
+// Refers reports whether this row's value contains a variable reference, so
+// that the panel can render it as the template it is rather than as a value.
+func (n *Node) Refers() bool {
+	r := n.resolverFor()
+	return r != nil && r.Refers(n.value)
+}
 
 func (n *Node) appendRows(rows *[]*Node) {
 	for _, c := range n.children {

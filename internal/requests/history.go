@@ -1,6 +1,7 @@
 package requests
 
 import (
+	"maps"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -150,5 +151,6 @@ func sameRequest(a, b Request) bool {
 	return a.Method == b.Method &&
 		a.Target == b.Target &&
 		slices.Equal(a.Headers, b.Headers) &&
+		maps.Equal(a.Values, b.Values) &&
 		reflect.DeepEqual(a.Body, b.Body)
 }

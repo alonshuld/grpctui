@@ -37,7 +37,41 @@ func (e *FieldError) Error() string { return e.Path + ": " + e.Err.Error() }
 
 func (e *FieldError) Unwrap() error { return e.Err }
 
-// Build turns the filled-in form into a request message.
+// builder carries the state one walk over the form accumulates: what it could
+// not use, and — for a template build — the references it kept out of the
+// message.
+type builder struct {
+	// resolver expands the values on the way past. It is nil for a form that has
+	// none, in which case every value is sent exactly as it was typed.
+	resolver Resolver
+
+	// template switches the walk from "what goes on the wire" to "what a record
+	// keeps": a value carrying a reference is written as the reference rather
+	// than as its expansion. See [Form.Template].
+	template bool
+
+	errs   []error
+	values map[string]string
+}
+
+// refers reports whether a value is a reference this walk must not expand.
+func (b *builder) refers(value string) bool {
+	return b.template && b.resolver != nil && b.resolver.Refers(value)
+}
+
+// record keeps one row's reference text, for the fields whose protobuf type
+// cannot hold it.
+func (b *builder) record(path, value string) {
+	if b.values == nil {
+		b.values = make(map[string]string)
+	}
+	b.values[path] = value
+}
+
+func (b *builder) fail(err error) { b.errs = append(b.errs, err) }
+
+// Build turns the filled-in form into a request message, expanding every
+// variable reference on the way.
 //
 // A row the user never touched is left alone, and so is one holding an empty
 // value — "" and "unset" are the same thing for an ordinary proto3 field, and
@@ -51,22 +85,53 @@ func (e *FieldError) Unwrap() error { return e.Err }
 //
 // Every unusable value is reported, not just the first: a form that fails one
 // field at a time is miserable to fill in. The returned error joins one
-// [*FieldError] per bad row.
+// [*FieldError] per bad row, which is also where a reference nothing binds
+// lands — so the complaint arrives on the row that made it.
 func (f Form) Build() (proto.Message, error) {
+	msg, _, err := f.build(builder{resolver: f.resolverFor()})
+	return msg, err
+}
+
+// Template turns the filled-in form into the request a record keeps: the same
+// message, with every variable reference left as it was written instead of
+// expanded.
+//
+// That is what makes a saved request portable, and it is the only way to keep
+// grpctui's standing rule about credentials true here. A token captured out of
+// a login response and referred to as {{token}} is exactly what chaining
+// requests produces, and writing its expansion into a collection meant to be
+// committed would be writing the token down.
+//
+// Most references need nothing beyond the message: a reference in a string
+// field is a perfectly good string, and survives the round trip through
+// protobuf's JSON mapping untouched. The rest cannot — "{{id}}" is not an int64
+// — so those fields are written at their zero value and the text is returned
+// alongside, keyed by [Node.Path], for [Form.LoadValues] to put back.
+func (f Form) Template() (proto.Message, map[string]string, error) {
+	return f.build(builder{resolver: f.resolverFor(), template: true})
+}
+
+func (f Form) build(b builder) (proto.Message, map[string]string, error) {
 	if f.root == nil || f.root.md == nil {
-		return nil, errors.New("build request: form has no message descriptor")
+		return nil, nil, errors.New("build request: form has no message descriptor")
 	}
 
 	msg := dynamicpb.NewMessage(f.root.md)
-	var errs []error
+	f.root.build(msg, &b)
+	b.errs = append(b.errs, f.root.missingRequired(msg)...)
 
-	f.root.build(msg, &errs)
-	errs = append(errs, f.root.missingRequired(msg)...)
-
-	if len(errs) > 0 {
-		return nil, errors.Join(errs...)
+	if len(b.errs) > 0 {
+		return nil, nil, errors.Join(b.errs...)
 	}
-	return msg, nil
+	return msg, b.values, nil
+}
+
+// resolverFor returns the expansion the form was given, if any.
+func (f Form) resolverFor() Resolver {
+	if f.root == nil {
+		return nil
+	}
+	return f.root.resolver
 }
 
 // Validate reports what [Form.Build] would refuse to send, and nothing else. It
@@ -79,8 +144,13 @@ func (f Form) Validate() error {
 
 // Validate reports whether this row's own value is usable, for the panel to
 // call as soon as an edit ends rather than waiting for a send.
+//
+// A value that is a variable reference is left alone: what it will be worth is
+// not known until the request is built, and a form recalled under an
+// environment that does not bind it is not a typo to complain about mid-edit.
+// The send says so instead, where the answer is actually needed.
 func (n *Node) Validate() error {
-	if !n.Editable() || n.value == "" {
+	if !n.Editable() || n.value == "" || n.Refers() {
 		return nil
 	}
 	if _, err := n.parse(n.value); err != nil {
@@ -90,10 +160,10 @@ func (n *Node) Validate() error {
 }
 
 // build fills msg from n's children, reporting whether anything was set.
-func (n *Node) build(msg protoreflect.Message, errs *[]error) bool {
+func (n *Node) build(msg protoreflect.Message, b *builder) bool {
 	set := false
 	for _, c := range n.children {
-		if c.setInto(msg, errs) {
+		if c.setInto(msg, b) {
 			set = true
 		}
 	}
@@ -101,28 +171,28 @@ func (n *Node) build(msg protoreflect.Message, errs *[]error) bool {
 }
 
 // setInto writes one row into the message holding it.
-func (n *Node) setInto(msg protoreflect.Message, errs *[]error) bool {
+func (n *Node) setInto(msg protoreflect.Message, b *builder) bool {
 	switch n.kind {
 	case KindMessage:
-		return n.setMessage(msg, errs)
+		return n.setMessage(msg, b)
 	case KindList:
-		return n.setList(msg, errs)
+		return n.setList(msg, b)
 	case KindMap:
-		return n.setMap(msg, errs)
+		return n.setMap(msg, b)
 	case KindOneof:
 		if n.active == nil {
 			return false
 		}
-		return n.active.setInto(msg, errs)
+		return n.active.setInto(msg, b)
 	case KindChoice, KindUnsupported:
 		return false
 	default:
-		return n.setScalar(msg, errs)
+		return n.setScalar(msg, b)
 	}
 }
 
 // setScalar writes a leaf row — a string, a number, a bool, an enum.
-func (n *Node) setScalar(msg protoreflect.Message, errs *[]error) bool {
+func (n *Node) setScalar(msg protoreflect.Message, b *builder) bool {
 	if n.value == "" {
 		switch {
 		case n.isActiveVariant():
@@ -136,13 +206,29 @@ func (n *Node) setScalar(msg protoreflect.Message, errs *[]error) bool {
 		}
 	}
 
+	if b.refers(n.value) {
+		msg.Set(n.fd, n.templateValue(b))
+		return true
+	}
+
 	v, err := n.parse(n.value)
 	if err != nil {
-		*errs = append(*errs, n.fieldError(err))
+		b.fail(n.fieldError(err))
 		return false
 	}
 	msg.Set(n.fd, v)
 	return true
+}
+
+// templateValue is what a reference is written as in a template build: itself,
+// where the field's type can hold it, and the type's zero value plus a recorded
+// path where it cannot.
+func (n *Node) templateValue(b *builder) protoreflect.Value {
+	if n.kind == KindString {
+		return protoreflect.ValueOfString(n.value)
+	}
+	b.record(n.Path(), n.value)
+	return n.zero()
 }
 
 // setMessage writes a nested message, if there is anything in it to write.
@@ -150,21 +236,21 @@ func (n *Node) setScalar(msg protoreflect.Message, errs *[]error) bool {
 // Required fields are checked only for a message that is actually sent: a
 // proto2 message the user never opened is not an incomplete request, it is an
 // absent optional field.
-func (n *Node) setMessage(msg protoreflect.Message, errs *[]error) bool {
+func (n *Node) setMessage(msg protoreflect.Message, b *builder) bool {
 	if !n.dirty() {
 		return false
 	}
 
 	sub := msg.NewField(n.fd)
-	n.build(sub.Message(), errs)
-	*errs = append(*errs, n.missingRequired(sub.Message())...)
+	n.build(sub.Message(), b)
+	b.errs = append(b.errs, n.missingRequired(sub.Message())...)
 	msg.Set(n.fd, sub)
 	return true
 }
 
 // setList writes a repeated field. An item that is on screen is sent, empty or
 // not: adding one is how the user says a value belongs there.
-func (n *Node) setList(msg protoreflect.Message, errs *[]error) bool {
+func (n *Node) setList(msg protoreflect.Message, b *builder) bool {
 	if len(n.children) == 0 {
 		return false
 	}
@@ -173,15 +259,23 @@ func (n *Node) setList(msg protoreflect.Message, errs *[]error) bool {
 	for _, item := range n.children {
 		if item.kind == KindMessage {
 			elem := list.NewElement()
-			item.build(elem.Message(), errs)
-			*errs = append(*errs, item.missingRequired(elem.Message())...)
+			item.build(elem.Message(), b)
+			b.errs = append(b.errs, item.missingRequired(elem.Message())...)
 			list.Append(elem)
+			continue
+		}
+
+		// An item is appended whatever it holds, reference or not: dropping one
+		// would renumber every item after it, and a path recorded against
+		// "tags[2]" would come back on the wrong row.
+		if b.refers(item.value) {
+			list.Append(item.templateValue(b))
 			continue
 		}
 
 		v, err := item.parseOrZero()
 		if err != nil {
-			*errs = append(*errs, item.fieldError(err))
+			b.fail(item.fieldError(err))
 			continue
 		}
 		list.Append(v)
@@ -192,7 +286,7 @@ func (n *Node) setList(msg protoreflect.Message, errs *[]error) bool {
 // setMap writes a map field. Every entry is a message of protobuf's generated
 // entry type, so it is built like any other nested message and then split into
 // the key and value the map wants.
-func (n *Node) setMap(msg protoreflect.Message, errs *[]error) bool {
+func (n *Node) setMap(msg protoreflect.Message, b *builder) bool {
 	if len(n.children) == 0 {
 		return false
 	}
@@ -202,7 +296,7 @@ func (n *Node) setMap(msg protoreflect.Message, errs *[]error) bool {
 
 	for _, entry := range n.children {
 		built := dynamicpb.NewMessage(n.fd.Message())
-		entry.build(built, errs)
+		entry.build(built, b)
 
 		// An entry whose value was left alone still belongs in the map — the user
 		// added it — so the map's own empty value stands in for it.
@@ -281,8 +375,18 @@ func (n *Node) zero() protoreflect.Value {
 	}
 }
 
-// parse converts one row's text into a protobuf value.
+// parse converts one row's text into a protobuf value, expanding its variable
+// references first.
+//
+// Resolution happens here rather than a layer up so that every kind gets it for
+// free: {{user_id}} is as useful in an int64 field as in a string one, and a
+// substitution that only worked on text would be the more surprising rule.
 func (n *Node) parse(raw string) (protoreflect.Value, error) {
+	raw, err := n.resolve(raw)
+	if err != nil {
+		return protoreflect.Value{}, err
+	}
+
 	switch n.kind {
 	case KindString:
 		return protoreflect.ValueOfString(raw), nil
@@ -301,6 +405,17 @@ func (n *Node) parse(raw string) (protoreflect.Value, error) {
 	default:
 		return protoreflect.Value{}, errors.New("this field cannot be filled in")
 	}
+}
+
+// resolve expands the variable references in one row's text. A form with no
+// resolver leaves it exactly as typed, which is what a run with no environments
+// configured gets.
+func (n *Node) resolve(raw string) (string, error) {
+	r := n.resolverFor()
+	if r == nil {
+		return raw, nil
+	}
+	return r.Resolve(raw)
 }
 
 // format renders a protobuf value as the text [Node.parse] accepts back.

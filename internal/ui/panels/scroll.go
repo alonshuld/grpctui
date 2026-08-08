@@ -1,5 +1,34 @@
 package panels
 
+import (
+	"github.com/charmbracelet/bubbles/key"
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/alonshuld/grpctui/internal/ui/keys"
+)
+
+// moveCursor applies the navigation keys every modal chooser shares, reporting
+// where the cursor should go and whether the key was one of them.
+//
+// The two choosers — connections and environments — are the same list with
+// different rows, and their Update methods differ only in what closing and
+// choosing mean. Sharing the navigation is what keeps the pair from drifting
+// into two subtly different sets of keys.
+func moveCursor(msg tea.KeyMsg, km keys.KeyMap, cursor, n int) (int, bool) {
+	switch {
+	case key.Matches(msg, km.Up):
+		return cursor - 1, true
+	case key.Matches(msg, km.Down):
+		return cursor + 1, true
+	case key.Matches(msg, km.Top):
+		return 0, true
+	case key.Matches(msg, km.Bottom):
+		return n - 1, true
+	default:
+		return cursor, false
+	}
+}
+
 // The tree and the request form scroll the same way: a cursor that moves within
 // a list, and a window that follows it. They differ only in what they are
 // counting — the tree's rows are its lines, while the form's cursor indexes

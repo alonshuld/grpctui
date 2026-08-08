@@ -66,6 +66,10 @@ func (p Profiles) Active() (grpcclient.Profile, bool) {
 	return p.profiles[p.active], true
 }
 
+// ActiveIndex is where the connected profile sits in the list, which is what a
+// reconnection has to carry back so the marker lands on the same row.
+func (p Profiles) ActiveIndex() int { return p.active }
+
 // Len reports how many profiles there are. The switcher is worth offering only
 // when there is something to switch to.
 func (p Profiles) Len() int { return len(p.profiles) }
@@ -102,15 +106,12 @@ func (p Profiles) Update(msg tea.Msg) (Profiles, tea.Cmd) {
 		return p, nil
 	}
 
+	if cursor, moved := moveCursor(keyMsg, p.keys, p.cursor, len(p.profiles)); moved {
+		p.moveTo(cursor)
+		return p, nil
+	}
+
 	switch {
-	case key.Matches(keyMsg, p.keys.Up):
-		p.moveTo(p.cursor - 1)
-	case key.Matches(keyMsg, p.keys.Down):
-		p.moveTo(p.cursor + 1)
-	case key.Matches(keyMsg, p.keys.Top):
-		p.moveTo(0)
-	case key.Matches(keyMsg, p.keys.Bottom):
-		p.moveTo(len(p.profiles) - 1)
 	case key.Matches(keyMsg, p.keys.Cancel), key.Matches(keyMsg, p.keys.Profiles):
 		p.Close()
 	case key.Matches(keyMsg, p.keys.Select):

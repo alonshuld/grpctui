@@ -66,6 +66,19 @@ type Request struct {
 	// a message.
 	Body any `yaml:"body,omitempty"`
 
+	// Values are the {{variable}} references the body cannot hold, keyed by
+	// field path — "user.id", "tags[1]".
+	//
+	// A request is recorded as it was typed, references and all: that is what
+	// makes a collection portable between environments, and it is the only way
+	// to keep grpctui's rule about credentials true here, since a token captured
+	// out of a login response is exactly what a chained request refers to. Most
+	// references need no entry — one in a string field is a perfectly good
+	// string and rides along in Body — so this holds only the ones protobuf's
+	// JSON mapping would reject, and those fields sit at their zero value in
+	// Body until [protoschema.Form.LoadValues] puts the text back.
+	Values map[string]string `yaml:"values,omitempty"`
+
 	// SentAt is when the call was made, in UTC. A saved request keeps the
 	// timestamp of the call it was saved from.
 	SentAt time.Time `yaml:"sent_at,omitempty"`
@@ -111,6 +124,16 @@ func (r Request) Search() string {
 	b.WriteString(strings.ToLower(r.Method))
 	b.WriteByte('\n')
 	flatten(&b, r.Body)
+
+	// A field filled in from a variable is not in the body, so without this the
+	// one thing a user remembers about the call — that it was the one using
+	// {{tenant}} — would be the one thing they could not search for.
+	for path, value := range r.Values {
+		b.WriteString(strings.ToLower(path))
+		b.WriteByte('\n')
+		b.WriteString(strings.ToLower(value))
+		b.WriteByte('\n')
+	}
 	return b.String()
 }
 

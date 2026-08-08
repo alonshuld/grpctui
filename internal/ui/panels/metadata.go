@@ -53,6 +53,11 @@ type Metadata struct {
 	input   textinput.Model
 	editing bool
 
+	// notice is a complaint about the headers as a whole rather than about one
+	// row — a {{variable}} reference nothing binds, in practice, which belongs
+	// to the send rather than to the row it sits on.
+	notice string
+
 	cursor int
 	column int
 	offset int
@@ -78,6 +83,7 @@ func NewMetadata(km keys.KeyMap, st styles.Styles) Metadata {
 // does, since headers belong to the connection.
 func (m *Metadata) SetHeaders(md grpcclient.Metadata) {
 	m.headers = md.Clone()
+	m.notice = ""
 	m.editing = false
 	m.input.Blur()
 	m.cursor = 0
@@ -114,6 +120,13 @@ func (m *Metadata) FocusFirstInvalid() bool {
 		}
 	}
 	return false
+}
+
+// SetNotice puts a line at the foot of the panel, for a complaint that belongs
+// to the headers as a whole. The next send replaces it.
+func (m *Metadata) SetNotice(text string) {
+	m.notice = text
+	m.refresh()
 }
 
 // Len reports how many headers the panel holds, for the status bar.
@@ -369,7 +382,8 @@ func (m *Metadata) refresh() {
 // build lays the panel out as lines, before scrolling.
 func (m Metadata) build() []line {
 	if len(m.headers) == 0 {
-		return []line{plain(styles.Truncate(m.styles.Muted.Render("No headers. Press a to add one."), m.width))}
+		lines := []line{plain(styles.Truncate(m.styles.Muted.Render("No headers. Press a to add one."), m.width))}
+		return append(lines, m.noticeLines()...)
 	}
 
 	lines := make([]line, 0, len(m.headers))
@@ -379,7 +393,16 @@ func (m Metadata) build() []line {
 			lines = append(lines, plain(m.indented(m.styles.FieldError.Render("⚠ "+msg))))
 		}
 	}
-	return lines
+	return append(lines, m.noticeLines()...)
+}
+
+// noticeLines renders the panel-level complaint from the last send attempt, if
+// there was one.
+func (m Metadata) noticeLines() []line {
+	if m.notice == "" {
+		return nil
+	}
+	return []line{plain(styles.Truncate(m.styles.FieldError.Render("⚠ "+m.notice), m.width))}
 }
 
 // rowError reports what is wrong with a header, and nothing at all for the two
