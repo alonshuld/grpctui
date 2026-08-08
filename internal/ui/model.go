@@ -25,8 +25,10 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/alonshuld/grpctui/internal/export"
 	"github.com/alonshuld/grpctui/internal/grpcclient"
 	"github.com/alonshuld/grpctui/internal/protoschema"
+	"github.com/alonshuld/grpctui/internal/proxy"
 	"github.com/alonshuld/grpctui/internal/requests"
 	"github.com/alonshuld/grpctui/internal/ui/keys"
 	"github.com/alonshuld/grpctui/internal/ui/panels"
@@ -199,6 +201,20 @@ func WithHistory(h requests.History) Option {
 	return func(m *Model) { m.history = h }
 }
 
+// WithTraffic points the traffic panel at a running passive proxy: the events
+// it reports, where it is listening, and a way to ask how many events it had to
+// drop. Without it the traffic key explains that grpctui is not proxying.
+func WithTraffic(events <-chan proxy.Event, listen string, dropped func() int) Option {
+	return func(m *Model) {
+		if events == nil {
+			return
+		}
+		m.events = events
+		m.dropped = dropped
+		m.traffic.Enable(listen)
+	}
+}
+
 // WithCollections supplies the saved requests. Without one the browser shows
 // history alone and saving reports that there is nowhere to save to.
 func WithCollections(c requests.Collections) Option {
@@ -240,9 +256,33 @@ type Model struct {
 	environments panels.Environments
 	variables    panels.Variables
 
+	// export shows the request in the form as a grpcurl command, and traffic
+	// the calls the passive proxy has seen. Both are modal for the same reason
+	// the four above are: they are about the session rather than about the
+	// request in front of you, and neither belongs in the tab cycle.
+	export  panels.Export
+	traffic panels.Traffic
+
 	// history is every request sent, newest first. It lives on the model rather
 	// than behind the browser because [ and ] walk it with the browser closed.
 	history requests.History
+
+	// responses is the last body each method answered with, which is what the
+	// diff view compares the next one against. It is memory only and never
+	// written down — a response body holds whatever the server chose to put in
+	// it, and grpctui's standing rule about surfaces that outlive a call applies
+	// to answers as much as to credentials.
+	//
+	// It is capped: a long session against a large schema would otherwise keep a
+	// body per method for the life of the process. An evicted method simply
+	// reports its next response as the first one.
+	responses map[string]string
+
+	// events is the passive proxy's stream of what has gone past, and dropped
+	// asks it how much it could not hand over. Both are nil unless grpctui was
+	// started with --proxy.
+	events  <-chan proxy.Event
+	dropped func() int
 
 	// historyAt is where [ and ] have walked to, or -1 when the form holds
 	// something the user built rather than something recalled. Stepping back
@@ -346,6 +386,9 @@ func New(client Client, opts ...Option) Model {
 		browser:          panels.NewRequests(km, st),
 		environments:     panels.NewEnvironments(km, st),
 		variables:        panels.NewVariables(km, st),
+		export:           panels.NewExport(km, st),
+		traffic:          panels.NewTraffic(km, st),
+		responses:        make(map[string]string),
 		historyAt:        noHistory,
 		lastCollection:   requests.DefaultCollection,
 		state:            stateConnecting,
@@ -361,6 +404,7 @@ func New(client Client, opts ...Option) Model {
 	// a list of "5m ago" is decided by the messages that produced it.
 	m.browser.SetClock(m.now)
 	m.browser.SetHistory(m.history)
+	m.traffic.SetClock(m.now)
 
 	// The form resolves against whatever is bound, including nothing: a model
 	// built with no environments still has to expand a reference to a variable
@@ -400,9 +444,24 @@ func (m *Model) bind(v vars.Variable) {
 // request.
 const noHistory = -1
 
-// Init starts discovery and the loading spinner.
+// Init starts discovery, the loading spinner and — when there is one — the read
+// loop over the proxy's events.
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.spinner.Tick, m.discover())
+	cmds := []tea.Cmd{m.spinner.Tick, m.discover()}
+	if m.events != nil {
+		cmds = append(cmds, watchTraffic(m.events))
+	}
+	return tea.Batch(cmds...)
+}
+
+// watchTraffic reads one event off the proxy. Each one issues the next, which
+// is the same chain of commands a stream is drained by and for the same reason:
+// Update must never block on something that may not happen for an hour.
+func watchTraffic(events <-chan proxy.Event) tea.Cmd {
+	return func() tea.Msg {
+		event, ok := <-events
+		return trafficEventMsg{event: event, ok: ok}
+	}
 }
 
 // discover runs one reflection sweep off the Update goroutine.
@@ -569,6 +628,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case panels.VariableCapturedMsg:
 		return m.capture(msg)
 
+	case panels.TrafficReplayMsg:
+		return m.replayTraffic(msg)
+
+	case trafficEventMsg:
+		return m.recordTraffic(msg)
+
 	case clientConnectedMsg:
 		return m.finishConnect(msg)
 
@@ -587,31 +652,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 		return tea.Quit, true
 	}
 
-	// The modals own every remaining key while they are open, including the
-	// panel switches — each is a choice to finish, not a place to tab out of.
-	// The browser and the variables panel come before the send below, because
-	// inside them ctrl+s means "load and send this one" and ctrl+p means
-	// "capture into this prompt".
-	if m.profiles.Opened() {
-		var cmd tea.Cmd
-		m.profiles, cmd = m.profiles.Update(msg)
-		return cmd, true
-	}
-	if m.environments.Opened() {
-		var cmd tea.Cmd
-		m.environments, cmd = m.environments.Update(msg)
-		return cmd, true
-	}
-	if m.browser.Opened() {
-		var cmd tea.Cmd
-		m.browser, cmd = m.browser.Update(msg)
-		m.layout()
-		return cmd, true
-	}
-	if m.variables.Opened() {
-		var cmd tea.Cmd
-		m.variables, cmd = m.variables.Update(msg)
-		m.layout()
+	if cmd, handled := m.handleModalKey(msg); handled {
 		return cmd, true
 	}
 
@@ -682,6 +723,27 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 		m.startSave()
 		return nil, true
 
+	case key.Matches(msg, m.keys.Export):
+		m.startExport()
+		return nil, true
+
+	case key.Matches(msg, m.keys.Traffic):
+		m.traffic.Open()
+		m.layout()
+		return nil, true
+
+	// The two response renderings are toggled from anywhere rather than only
+	// with the response panel focused. Reaching for the raw bytes is something
+	// you do while looking at a form that produced a surprising answer, and
+	// making it a two-key job would put it in the way of its own purpose.
+	case key.Matches(msg, m.keys.RawView):
+		m.response.ToggleRaw()
+		return nil, true
+
+	case key.Matches(msg, m.keys.Diff):
+		m.response.ToggleDiff()
+		return nil, true
+
 	case key.Matches(msg, m.keys.Help):
 		m.help.ShowAll = !m.help.ShowAll
 		m.measureHelp()
@@ -698,6 +760,48 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 		return nil, true
 	}
 	return nil, false
+}
+
+// handleModalKey gives the key to whichever modal is open, and reports whether
+// one was.
+//
+// A modal owns every remaining key while it is up, including the panel switches
+// — each is a choice to finish, not a place to tab out of. That is why this runs
+// before the sends and the switches below: inside the browser ctrl+s means
+// "load and send this one", and inside the variables panel ctrl+p means
+// "capture into this prompt".
+func (m *Model) handleModalKey(msg tea.KeyMsg) (tea.Cmd, bool) {
+	var cmd tea.Cmd
+
+	switch {
+	case m.profiles.Opened():
+		m.profiles, cmd = m.profiles.Update(msg)
+		// The two switchers have no rows of their own to reflow, so they are the
+		// two that do not relayout.
+		return cmd, true
+
+	case m.environments.Opened():
+		m.environments, cmd = m.environments.Update(msg)
+		return cmd, true
+
+	case m.browser.Opened():
+		m.browser, cmd = m.browser.Update(msg)
+
+	case m.variables.Opened():
+		m.variables, cmd = m.variables.Update(msg)
+
+	case m.traffic.Opened():
+		m.traffic, cmd = m.traffic.Update(msg)
+
+	case m.export.Opened():
+		m.export, cmd = m.export.Update(msg)
+
+	default:
+		return nil, false
+	}
+
+	m.layout()
+	return cmd, true
 }
 
 // editing reports whether a text field somewhere is being typed into.
@@ -1011,6 +1115,133 @@ func (m *Model) switchEnvironment(msg panels.EnvironmentSelectedMsg) tea.Cmd {
 		Index:   m.profiles.ActiveIndex(),
 		Profile: profile,
 	})
+}
+
+// startExport renders the request in the form as a grpcurl command.
+//
+// The request is built first, and a form that does not build stops here with
+// its error rows showing rather than behind a modal that covers them — the same
+// order [Model.startSave] uses, for the same reason.
+//
+// What is exported is the *template*: the request as it was typed, with its
+// {{variable}} references intact and its header values replaced by
+// placeholders. A command that ran as it stands would be one carrying a bearer
+// token into whatever the user pastes it into.
+func (m *Model) startExport() {
+	if m.state != stateReady {
+		return
+	}
+
+	method, ok := m.request.Method()
+	if !ok {
+		m.export.OpenNotice("Select a method first.")
+		m.layout()
+		return
+	}
+
+	req, ok := m.request.Submit()
+	if !ok {
+		m.layout()
+		return
+	}
+
+	message := req.Template
+	if message == nil {
+		message = req.Request
+	}
+
+	body, _, err := protoschema.MarshalRequest(message)
+	if err != nil {
+		m.export.OpenNotice("The request could not be rendered: " + err.Error())
+		m.layout()
+		m.logger.Warn("could not export the request",
+			zap.String("method", method.FullName), zap.Error(err))
+		return
+	}
+
+	command := export.Command{
+		Target: m.client.Target(),
+		Method: method.FullName,
+		Body:   body,
+		Values: req.Values,
+		// Names only. Resolving them would mean expanding the references, and
+		// the values are exactly what must not leave.
+		Headers: m.metadata.Headers().Keys(),
+	}
+	if profile, ok := m.profiles.Active(); ok {
+		command.Security, command.Auth = profile.Security, profile.Auth
+	}
+
+	m.export.Open(export.Grpcurl(command))
+	m.layout()
+	m.logger.Debug("exported a request", zap.String("method", method.FullName))
+}
+
+// recordTraffic folds one proxy event into the traffic log and asks for the
+// next.
+//
+// A closed channel ends the chain: the proxy has stopped, and what it saw stays
+// on screen.
+func (m Model) recordTraffic(msg trafficEventMsg) (tea.Model, tea.Cmd) {
+	if !msg.ok {
+		m.logger.Debug("the proxy stopped reporting")
+		return m, nil
+	}
+
+	m.traffic.Record(msg.event)
+	if m.dropped != nil {
+		m.traffic.SetLost(m.dropped())
+	}
+	if m.traffic.Opened() {
+		// Only when it is on screen: the log grows on every message a busy
+		// service carries, and re-measuring the whole frame for a panel nobody
+		// is looking at is work for nothing.
+		m.layout()
+	}
+	return m, watchTraffic(m.events)
+}
+
+// replayTraffic fills the form in from a call the proxy watched go past.
+//
+// This is what makes passive mode more than a log: the request arrives as bytes
+// with no schema attached, and the descriptor reflection already discovered is
+// what turns it back into a form you can edit and send yourself.
+func (m Model) replayTraffic(msg panels.TrafficReplayMsg) (tea.Model, tea.Cmd) {
+	if m.state != stateReady {
+		return m, nil
+	}
+
+	svc, method, ok := m.tree.SelectMethod(msg.Method)
+	if !ok {
+		m.request.SetNotice(msg.Method + " is not on this connection.")
+		m.layout()
+		m.logger.Debug("a proxied method is not on this connection",
+			zap.String("method", msg.Method))
+		return m, nil
+	}
+
+	decoded, err := protoschema.DecodeWire(method.InputDescriptor(), msg.Wire)
+	if err != nil {
+		m.request.SetNotice(err.Error())
+		m.layout()
+		m.logger.Warn("could not decode a proxied request",
+			zap.String("method", msg.Method), zap.Error(err))
+		return m, nil
+	}
+
+	m.retireCall()
+	m.request.SetMethod(svc, method)
+	m.request.Load(decoded)
+	m.response.SetMethod(method)
+	m.request.SetNotice("Loaded from the proxy. Headers are the ones on this connection.")
+
+	// The form now holds something that came from outside the history walk, so
+	// the walk starts over — the same thing recalling from the browser does.
+	m.historyAt = noHistory
+	m.layout()
+
+	m.logger.Debug("loaded a proxied request", zap.String("method", msg.Method))
+	return m, nil
 }
 
 // startSave asks where to put the request in the form.
@@ -1481,21 +1712,37 @@ func (m *Model) startCall(req panels.SendRequestMsg, md grpcclient.Metadata) tea
 
 // invoke runs the call off the Update goroutine, decoding the response there
 // too so that the panel receives text and never a protobuf message.
+//
+// The raw encoding is produced here as well, for the same reason: it is work
+// per response, and Update is not the place for any of it. A message that will
+// not re-encode simply has no raw view — the call itself succeeded, and
+// reporting it as failed over a rendering would be absurd.
 func invoke(ctx context.Context, cancel context.CancelFunc, client Invoker, req panels.SendRequestMsg, md grpcclient.Metadata, seq int) tea.Cmd {
+	method := req.Method.FullName
 	return func() tea.Msg {
 		defer cancel()
 
 		resp, err := client.InvokeUnary(ctx, req.Method, req.Request, md)
 		if err != nil {
 			st, ok := grpcclient.StatusOf(err)
-			return callFinishedMsg{seq: seq, err: err, status: st, hasStatus: ok}
+			return callFinishedMsg{seq: seq, method: method, err: err, status: st, hasStatus: ok}
 		}
 
 		body, format, err := protoschema.Marshal(resp.Message)
 		if err != nil {
-			return callFinishedMsg{seq: seq, err: err, duration: resp.Duration}
+			return callFinishedMsg{seq: seq, method: method, err: err, duration: resp.Duration}
 		}
-		return callFinishedMsg{seq: seq, body: body, format: format, duration: resp.Duration}
+
+		wire, _ := protoschema.Wire(resp.Message)
+		return callFinishedMsg{
+			seq:      seq,
+			method:   method,
+			body:     body,
+			format:   format,
+			wire:     wire,
+			duration: resp.Duration,
+			timing:   resp.Timing,
+		}
 	}
 }
 
@@ -1508,11 +1755,49 @@ func (m Model) finishCall(msg callFinishedMsg) (tea.Model, tea.Cmd) {
 
 	if msg.err != nil {
 		m.response.SetFailure(msg.err.Error(), msg.status, msg.hasStatus, msg.duration)
-	} else {
-		m.response.SetSuccess(msg.body, msg.format, msg.duration)
+		m.layout()
+		return m, nil
 	}
+
+	// The previous body is read before the new one replaces it, which is the
+	// whole of the diff view: "the same method, last time".
+	m.response.SetSuccess(panels.Result{
+		Body:     msg.body,
+		Format:   msg.format,
+		Wire:     msg.wire,
+		Previous: m.responses[msg.method],
+		Took:     msg.duration,
+		Timing:   msg.timing,
+	})
+	m.remember(msg.method, msg.body)
+
 	m.layout()
 	return m, nil
+}
+
+// maxDiffMethods is how many methods keep a previous response for the diff
+// view. It is a cache rather than a record: a method evicted from it reports
+// its next response as a first one, which is the same thing it would have said
+// before it was ever called.
+const maxDiffMethods = 24
+
+// remember keeps a response for the next call to the same method to be
+// compared against.
+func (m *Model) remember(method, body string) {
+	if m.responses == nil {
+		m.responses = make(map[string]string)
+	}
+
+	if _, held := m.responses[method]; !held && len(m.responses) >= maxDiffMethods {
+		// Which one goes is arbitrary — map order — and that is fine: every
+		// entry is equally a convenience, and choosing properly would mean
+		// keeping an access order for a cache of two dozen strings.
+		for evict := range m.responses {
+			delete(m.responses, evict)
+			break
+		}
+	}
+	m.responses[method] = body
 }
 
 // startConnect opens the connection a profile describes, tagged with a sequence
@@ -1754,6 +2039,10 @@ func (m Model) View() string {
 		screen = m.centred(m.variables.View())
 	case m.browser.Opened():
 		screen = m.centred(m.browser.View())
+	case m.traffic.Opened():
+		screen = m.centred(m.traffic.View())
+	case m.export.Opened():
+		screen = m.centred(m.export.View())
 	case m.state == stateConnecting:
 		screen = m.centred(fmt.Sprintf("%s Connecting to %s…",
 			m.spinner.View(), m.styles.Value.Render(m.target())))
@@ -1984,6 +2273,8 @@ func (m *Model) layout() {
 	m.browser.SetSize(m.width, m.height)
 	m.environments.SetSize(m.width, m.height)
 	m.variables.SetSize(m.width, m.height)
+	m.traffic.SetSize(m.width, m.height)
+	m.export.SetSize(m.width, m.height)
 }
 
 func (m Model) computeLayout() layoutSizes {

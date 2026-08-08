@@ -93,8 +93,13 @@ func Dial(target string, opts ...DialOption) (*Client, error) {
 		return nil, fmt.Errorf("dial %q: %w", target, err)
 	}
 
-	dialOpts := make([]grpc.DialOption, 0, len(cfg.grpcOpts)+2)
+	dialOpts := make([]grpc.DialOption, 0, len(cfg.grpcOpts)+3)
 	dialOpts = append(dialOpts, grpc.WithTransportCredentials(creds))
+
+	// The stats handler is installed once, here, and measures only the calls
+	// that ask for it — see [withTiming]. Installing it per call is not an
+	// option: gRPC takes stats handlers as dial options, not call options.
+	dialOpts = append(dialOpts, grpc.WithStatsHandler(statsHandler{}))
 
 	if header, ok := cfg.auth.header(); ok {
 		if !cfg.security.TLS {
@@ -156,6 +161,16 @@ func (c *Client) Target() string { return c.target }
 
 // Security reports how this connection is protected.
 func (c *Client) Security() Security { return c.security }
+
+// Conn exposes the underlying connection, for the one caller that needs to open
+// streams this package knows nothing about: internal/proxy, which forwards
+// whatever an outside client sends without decoding it.
+//
+// It is deliberately the narrow [grpc.ClientConnInterface] rather than a
+// *grpc.ClientConn. Everything grpctui's own layers do goes through the methods
+// on Client; this is a seam for passing a connection along, not an invitation
+// to reach past the transport layer.
+func (c *Client) Conn() grpc.ClientConnInterface { return c.conn }
 
 // Close releases the underlying connection.
 func (c *Client) Close() error {

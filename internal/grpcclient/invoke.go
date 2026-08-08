@@ -24,8 +24,16 @@ type UnaryResponse struct {
 	// method's output descriptor.
 	Message proto.Message
 
-	// Duration is the wall time the call took, measured around the invoke.
+	// Duration is the wall time the call took, measured around the invoke. It is
+	// therefore slightly more than [UnaryResponse.Timing]'s total, which is
+	// gRPC's own measurement of the call and does not include building the
+	// request or decoding the answer.
 	Duration time.Duration
+
+	// Timing is where that time went: connecting, waiting for the first byte,
+	// and the whole call, along with the payload sizes. Its zero value means
+	// nothing was measured — see [Timing].
+	Timing Timing
 }
 
 // CallStatus is a gRPC status flattened into plain fields.
@@ -112,9 +120,14 @@ func (c *Client) InvokeUnary(ctx context.Context, method Method, req proto.Messa
 	path := methodPath(method.Descriptor)
 	resp := dynamicpb.NewMessage(method.Descriptor.Output())
 
+	// The collector rides on the context, which is how one stats handler
+	// installed at dial time serves every concurrent call without a registry.
+	ctx, collector := withTiming(ctx)
+
 	start := time.Now()
 	err = c.conn.Invoke(ctx, path, req, resp)
 	took := time.Since(start)
+	timing := collector.result()
 
 	if err != nil {
 		// Debug, not error: a non-OK status is a perfectly normal answer from a
@@ -134,12 +147,14 @@ func (c *Client) InvokeUnary(ctx context.Context, method Method, req proto.Messa
 		zap.String("target", c.target),
 		zap.String("method", method.FullName),
 		zap.Duration("took", took),
+		zap.Duration("connect", timing.Connect),
+		zap.Duration("first_byte", timing.FirstByte),
 		zap.Int("request_bytes", proto.Size(req)),
 		zap.Int("response_bytes", proto.Size(resp)),
 		zap.Strings("headers", md.Keys()),
 	)
 
-	return &UnaryResponse{Message: resp, Duration: took}, nil
+	return &UnaryResponse{Message: resp, Duration: took, Timing: timing}, nil
 }
 
 // methodPath renders the "/package.Service/Method" path used on the wire.
