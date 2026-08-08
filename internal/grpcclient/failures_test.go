@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -223,12 +224,17 @@ func TestStream_SendAfterTheCallDied(t *testing.T) {
 	ts.stop()
 
 	// Which send notices the dead transport is a race with it, so keep sending
-	// until one does.
+	// until one does. The wait between attempts is what makes this a bound in
+	// *time* rather than a bound in iterations: a hundred sends complete in
+	// microseconds on a fast machine, which is no wait at all, and a test that
+	// depends on how quickly a loop spins is the kind that passes here and fails
+	// on a loaded CI runner.
 	var err error
-	for range 100 {
+	for range 200 {
 		if err = s.Send(item(t, method, "anyone there")); err != nil {
 			break
 		}
+		time.Sleep(10 * time.Millisecond)
 	}
 
 	require.ErrorIs(t, err, io.EOF, "a send onto a dead call is a bare io.EOF")
