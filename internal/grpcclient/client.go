@@ -13,6 +13,7 @@ import (
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 // Client is a connection to a single gRPC target. It is safe for concurrent
@@ -24,6 +25,12 @@ type Client struct {
 	target   string
 	security Security
 	logger   *zap.Logger
+
+	// schema, when it holds anything, is what [Client.ListServices] answers from
+	// instead of asking the server — the .proto-file fallback for a target with
+	// reflection switched off. It changes discovery and nothing else: a call is
+	// invoked from its method descriptor, which is the same type either way.
+	schema []protoreflect.ServiceDescriptor
 }
 
 // DialOption configures [Dial].
@@ -34,6 +41,7 @@ type dialConfig struct {
 	grpcOpts []grpc.DialOption
 	security Security
 	auth     Auth
+	schema   []protoreflect.ServiceDescriptor
 }
 
 // WithLogger attaches a logger to the client. Without it the client logs
@@ -64,6 +72,18 @@ func WithSecurity(s Security) DialOption {
 // reflection included.
 func WithAuth(a Auth) DialOption {
 	return func(cfg *dialConfig) { cfg.auth = a }
+}
+
+// WithSchema makes the client discover from descriptors it is given rather than
+// from server reflection — internal/protofiles compiles them out of .proto
+// source. Without it, discovery asks the target.
+//
+// It is a dial option rather than an argument to [Client.ListServices] because
+// where a schema comes from is a property of the connection: switching profile
+// re-dials, and a target chosen because it does not serve reflection needs its
+// files every time it is reached, not once.
+func WithSchema(services []protoreflect.ServiceDescriptor) DialOption {
+	return func(cfg *dialConfig) { cfg.schema = services }
 }
 
 // Dial creates a client for target ("host:port"), plaintext unless
@@ -137,6 +157,7 @@ func Dial(target string, opts ...DialOption) (*Client, error) {
 		target:   target,
 		security: cfg.security,
 		logger:   cfg.logger,
+		schema:   cfg.schema,
 	}, nil
 }
 

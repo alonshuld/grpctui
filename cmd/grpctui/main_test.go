@@ -77,10 +77,17 @@ func TestRun(t *testing.T) {
 			args:     []string{"-version"},
 			wantCode: exitOK,
 		},
+		// Help goes to stdout and exits 0, so that it can be piped into a pager
+		// and so that `grpctui --help && …` does not stop there.
 		"help": {
 			args:       []string{"--help"},
 			wantCode:   exitOK,
-			wantStderr: "Usage:",
+			wantStdout: "Usage:",
+		},
+		"-h": {
+			args:       []string{"-h"},
+			wantCode:   exitOK,
+			wantStdout: "grpctui completion <shell>",
 		},
 		"no target": {
 			args:       nil,

@@ -15,6 +15,7 @@ import (
 	"github.com/alonshuld/grpctui/internal/diff"
 	"github.com/alonshuld/grpctui/internal/grpcclient"
 	"github.com/alonshuld/grpctui/internal/protoschema"
+	"github.com/alonshuld/grpctui/internal/render"
 	"github.com/alonshuld/grpctui/internal/ui/keys"
 	"github.com/alonshuld/grpctui/internal/ui/styles"
 )
@@ -98,6 +99,13 @@ type Result struct {
 	// it. An unmeasured Timing leaves the status line saying only the total.
 	Took   time.Duration
 	Timing grpcclient.Timing
+
+	// Notes are the renderers' glosses on individual lines of Body — "3 minutes
+	// ago" beside a timestamp. They arrive rendered rather than being computed
+	// here because the message they were read from lives a layer up: see
+	// internal/render, which annotates rather than rewriting, so Body stays
+	// exactly what the server sent.
+	Notes []render.Annotation
 }
 
 // maxStreamEntries is how many lines of the log the panel keeps.
@@ -118,6 +126,10 @@ type streamEntry struct {
 	body     string
 	rendered string
 	format   protoschema.Format
+
+	// notes are the renderers' glosses on this message's lines, kept beside the
+	// text they annotate so that a theme switch can colour them again.
+	notes []render.Annotation
 
 	// at is how long into the stream this happened, which is the only timing a
 	// stream can usefully show: a per-message latency needs the request it
@@ -156,6 +168,10 @@ type Response struct {
 	rendered string
 	format   protoschema.Format
 	duration time.Duration
+
+	// notes are the renderers' glosses on the body's lines, kept so that a
+	// theme switch can lay them out again.
+	notes []render.Annotation
 
 	// view is which of the three renderings is on screen, wire the bytes the
 	// raw one shows, previous the body the diff one compares against, and
@@ -278,10 +294,18 @@ func (r *Response) AppendSent(body string, format protoschema.Format, at time.Du
 	r.append(streamEntry{kind: streamSent, body: body, format: format, at: at, index: r.sent})
 }
 
-// AppendReceived records a response message arriving.
-func (r *Response) AppendReceived(body string, format protoschema.Format, at time.Duration) {
+// AppendReceived records a response message arriving, with the renderers'
+// glosses on its lines.
+func (r *Response) AppendReceived(body string, format protoschema.Format, at time.Duration, notes []render.Annotation) {
 	r.received++
-	r.append(streamEntry{kind: streamReceived, body: body, format: format, at: at, index: r.received})
+	r.append(streamEntry{
+		kind:   streamReceived,
+		body:   body,
+		format: format,
+		notes:  notes,
+		at:     at,
+		index:  r.received,
+	})
 }
 
 // AppendNote records something that happened to the stream itself.
@@ -335,7 +359,7 @@ func (r *Response) SetElapsed(d time.Duration) {
 func (r *Response) append(entry streamEntry) {
 	entry.rendered = entry.body
 	if entry.kind != streamNote && entry.format == protoschema.FormatJSON {
-		entry.rendered = r.styles.HighlightJSON(entry.body)
+		entry.rendered = annotate(r.styles.HighlightJSON(entry.body), entry.notes, r.styles)
 	}
 
 	// Following the tail is what a stream panel is for, but a user who has
@@ -424,16 +448,45 @@ func (r *Response) SetSuccess(result Result) {
 	r.wire = result.Wire
 	r.previous = result.Previous
 	r.timing = result.Timing
+	r.notes = result.Notes
 
 	// Only JSON is highlighted. protobuf's text format is a different language,
 	// and colouring it by JSON's rules would put emphasis in the wrong places.
 	r.rendered = result.Body
 	if result.Format == protoschema.FormatJSON {
-		r.rendered = r.styles.HighlightJSON(result.Body)
+		r.rendered = annotate(r.styles.HighlightJSON(result.Body), result.Notes, r.styles)
 	}
 
 	r.setBody()
 	r.viewport.GotoTop()
+}
+
+// annotate appends each renderer's gloss to the line it belongs beside.
+//
+// The gloss sits after the value, behind a marker, and is dimmed: it is
+// commentary on the response and must never be mistaken for part of it. That is
+// the same reason internal/render annotates rather than rewriting — a reader
+// has to be able to tell at a glance what the server said from what grpctui
+// worked out about it.
+//
+// A note whose line is not in the text is dropped rather than clamped. It can
+// only happen if the body and the notes came from different messages, and
+// hanging "3 minutes ago" off an unrelated field would be worse than saying
+// nothing.
+func annotate(text string, notes []render.Annotation, st styles.Styles) string {
+	if len(notes) == 0 {
+		return text
+	}
+
+	lines := strings.Split(text, "\n")
+	for _, note := range notes {
+		i := note.Line - 1
+		if i < 0 || i >= len(lines) {
+			continue
+		}
+		lines[i] += st.Hint.Render("  ← " + note.Text)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // ToggleRaw swaps between the decoded body and the bytes behind it.

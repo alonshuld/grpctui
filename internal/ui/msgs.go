@@ -6,6 +6,7 @@ import (
 	"github.com/alonshuld/grpctui/internal/grpcclient"
 	"github.com/alonshuld/grpctui/internal/protoschema"
 	"github.com/alonshuld/grpctui/internal/proxy"
+	"github.com/alonshuld/grpctui/internal/render"
 	"github.com/alonshuld/grpctui/internal/requests"
 )
 
@@ -98,6 +99,11 @@ type streamRecvMsg struct {
 	body   string
 	format protoschema.Format
 
+	// notes are the renderers' glosses on the body's lines, computed in the
+	// command beside the rendering itself: it is work per message, and Update is
+	// not the place for any of it.
+	notes []render.Annotation
+
 	// done marks the clean end of the stream: the server finished sending and
 	// the call succeeded.
 	done bool
@@ -139,6 +145,10 @@ type callFinishedMsg struct {
 	// measures nothing has no breakdown.
 	wire   []byte
 	timing grpcclient.Timing
+
+	// notes are the renderers' glosses on the body's lines, computed in the
+	// command for the same reason the rendering is.
+	notes []render.Annotation
 
 	duration time.Duration
 }

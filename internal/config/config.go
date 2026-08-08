@@ -1,8 +1,9 @@
 // Package config loads grpctui's configuration file.
 //
 // The file is the seam through which connection profiles (v0.4), environments
-// (v0.7) and keybinding remapping (v0.9) arrive, so it is a struct with a
-// versioned shape rather than a bare string. Unknown keys are rejected:
+// (v0.7), and themes, keybindings, renderers and .proto files (v0.9) arrive, so
+// it is a struct with a versioned shape rather than a bare string. Unknown keys
+// are rejected:
 // silently ignoring a typo'd setting is the worst possible behaviour for a
 // config file.
 //
@@ -66,6 +67,75 @@ type Config struct {
 
 	// Envs are the variable sets {{name}} references resolve against.
 	Envs []Environment `yaml:"environments"`
+
+	// ThemeName names the theme to draw in. Empty uses the built-in default,
+	// which follows the terminal's own background.
+	ThemeName string `yaml:"theme"`
+
+	// Themes are the palettes the file defines, offered alongside the built-in
+	// ones.
+	Themes []Theme `yaml:"themes"`
+
+	// Keys remaps keybindings, from an action name to the keys that trigger it.
+	// An action nobody remaps keeps its built-in keys.
+	Keys map[string]string `yaml:"keys"`
+
+	// Proto names .proto sources to discover from instead of server reflection.
+	// Empty — the ordinary case — leaves discovery asking the target.
+	Proto Proto `yaml:"proto"`
+
+	// Renderers switches response renderers off by name. Every renderer is on
+	// unless it appears here set to false: one that had to be discovered and
+	// enabled before it did anything is one nobody would ever see.
+	Renderers map[string]bool `yaml:"renderers"`
+}
+
+// Proto is the .proto-file fallback for targets that do not serve reflection.
+//
+// It is top-level rather than per-profile because the files describe an API,
+// not a connection: the same schema serves the dev, staging and production
+// profiles of one service, and copying it into each would be three places to
+// forget.
+type Proto struct {
+	// Files are the .proto files to compile, as paths on disk or relative to one
+	// of ImportPaths. A leading ~ is expanded.
+	Files []string `yaml:"files"`
+
+	// ImportPaths are the directories an `import` statement is resolved against,
+	// protoc's -I. A leading ~ is expanded.
+	ImportPaths []string `yaml:"import_paths"`
+}
+
+// Paths returns the files and import paths with ${VAR} references and a leading
+// ~ expanded, as every other path in this file is.
+//
+// Every path is expanded before anything is reported, so a file naming three
+// unset variables says so once.
+func (p Proto) Paths() (files, importPaths []string, err error) {
+	var errs []error
+
+	expandAll := func(in []string) []string {
+		if len(in) == 0 {
+			return nil
+		}
+		out := make([]string, 0, len(in))
+		for _, s := range in {
+			value, err := expand(s)
+			if err != nil {
+				errs = append(errs, err)
+			}
+			path, err := expandPath(value)
+			if err != nil {
+				errs = append(errs, err)
+			}
+			out = append(out, path)
+		}
+		return out
+	}
+
+	files = expandAll(p.Files)
+	importPaths = expandAll(p.ImportPaths)
+	return files, importPaths, errors.Join(errs...)
 }
 
 // Profile is one saved connection.
@@ -194,6 +264,9 @@ func read(path string, mustExist bool) (Config, error) {
 		return Config{}, fmt.Errorf("config %q: %w", path, err)
 	}
 	if err := cfg.validateEnvironmentNames(); err != nil {
+		return Config{}, fmt.Errorf("config %q: %w", path, err)
+	}
+	if err := cfg.validateThemeNames(); err != nil {
 		return Config{}, fmt.Errorf("config %q: %w", path, err)
 	}
 	return cfg, nil

@@ -3,8 +3,9 @@
 // Every keybinding in the application is declared here exactly once. Panels
 // receive the [KeyMap] and match against its bindings; none of them compares a
 // key string directly. That is what lets the `?` help bar stay truthful for
-// free, and what makes config-driven remapping (v0.9) a change to this package
-// rather than a hunt through every panel.
+// free, and what made config-driven remapping a change to this package alone
+// rather than a hunt through every panel — see remap.go, which addresses these
+// bindings by name.
 //
 // It is a leaf package so that both internal/ui and internal/ui/panels can
 // import it without a cycle.
@@ -106,6 +107,11 @@ type KeyMap struct {
 	// outside grpctui. It is a capital X for the reason Save is a capital S: the
 	// lowercase letters in this range are already scroll and expand keys.
 	Export key.Binding
+
+	// Themes opens the theme switcher. It is a capital T for the reason Save is
+	// a capital S: the lowercase letters around it are already taken, and t in
+	// particular is the traffic log.
+	Themes key.Binding
 
 	// Traffic opens the log of calls the passive proxy has seen. Like the other
 	// modals it has a key of its own rather than a place in the tab cycle —
@@ -275,6 +281,10 @@ func (k *KeyMap) session() {
 		key.WithKeys("X"),
 		key.WithHelp("X", "grpcurl"),
 	)
+	k.Themes = key.NewBinding(
+		key.WithKeys("T"),
+		key.WithHelp("T", "theme"),
+	)
 	k.Traffic = key.NewBinding(
 		key.WithKeys("t"),
 		key.WithHelp("t", "traffic"),
@@ -323,7 +333,7 @@ func (k KeyMap) FullHelp() [][]key.Binding {
 		// costs a row rather than a column, since a column is only ever as wide
 		// as its widest entry.
 		{k.Add, k.Remove, k.Send, k.EndStream, k.Cancel, k.Requests, k.Save, k.Capture, k.Export},
-		{k.NextPanel, k.PrevPanel, k.Profiles, k.HistoryPrev, k.HistoryNext, k.Environments, k.Variables, k.Traffic},
+		{k.NextPanel, k.PrevPanel, k.Profiles, k.HistoryPrev, k.HistoryNext, k.Environments, k.Variables, k.Traffic, k.Themes},
 		{k.Retry, k.Help, k.Quit},
 	}
 }

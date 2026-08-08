@@ -12,7 +12,7 @@
               grpc.reflection.v1.ServerReflection                                                   
                                                                                                     
                   The target is reachable but does not serve the reflection API.                    
-                  Enable reflection on the server, or use .proto-file mode (v0.9).                  
+                  Enable reflection on the server, or restart with --proto <file>.                  
                                                                                                     
                                           r retry • q quit                                          
                                                                                                     

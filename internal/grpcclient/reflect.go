@@ -101,6 +101,10 @@ func (m Method) Kind() Kind {
 func (c *Client) ListServices(ctx context.Context, md Metadata) ([]Service, error) {
 	start := time.Now()
 
+	if len(c.schema) > 0 {
+		return c.listFromSchema(start), nil
+	}
+
 	ctx, err := md.attach(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list services: %w", err)
@@ -137,6 +141,29 @@ func (c *Client) ListServices(ctx context.Context, md Metadata) ([]Service, erro
 		zap.Duration("took", time.Since(start)),
 	)
 	return services, nil
+}
+
+// listFromSchema answers discovery out of the descriptors the client was dialed
+// with — the .proto-file path, taken when the target does not serve reflection.
+//
+// It does no I/O at all, which is the one behavioural difference the layers
+// above can observe: a target that is down still shows its full API here, and
+// only says so when a call is made. That is the right way round. The schema is
+// what the *files* say the server offers, and reporting it as unavailable
+// because the server is asleep would hide the schema the user supplied for
+// precisely this situation.
+func (c *Client) listFromSchema(start time.Time) []Service {
+	services := make([]Service, 0, len(c.schema))
+	for _, sd := range c.schema {
+		services = append(services, serviceFromDescriptor(sd))
+	}
+
+	c.logger.Info("loaded services from proto files",
+		zap.String("target", c.target),
+		zap.Int("services", len(services)),
+		zap.Duration("took", time.Since(start)),
+	)
+	return services
 }
 
 func serviceFromDescriptor(sd protoreflect.ServiceDescriptor) Service {
