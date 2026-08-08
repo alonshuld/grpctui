@@ -82,6 +82,12 @@ type Requests struct {
 	// visible indexes entries, holding the ones the current query matches.
 	visible []int
 
+	// columns is the width of the two fixed columns, measured when the entries
+	// change rather than when a frame is drawn. Neither depends on the clock, the
+	// filter or the terminal, so measuring them per keystroke was a pass over the
+	// whole history for an answer that had not moved.
+	columns columns
+
 	// input is the query while filtering and the destination while saving. One
 	// input serves both because they never happen at once.
 	input textinput.Model
@@ -112,6 +118,11 @@ type entry struct {
 	request  requests.Request
 	source   string
 	haystack string
+
+	// methodWidth is the width of the fixed half of the row's description. The
+	// other half is how long ago the request was sent, which is the only thing
+	// about a row that changes without the entries themselves changing.
+	methodWidth int
 }
 
 // NewRequests builds an empty browser.
@@ -357,17 +368,38 @@ func (r *Requests) rebuild() {
 	}
 
 	r.entries = entries
+	r.columns = measure(entries)
 	r.filter()
 	r.moveTo(r.cursor)
+}
+
+// columns is the width of the two fixed columns of the list.
+type columns struct {
+	label  int
+	source int
+}
+
+// measure sizes them against every entry rather than the visible ones, so that
+// filtering narrows the list without moving the walls around it.
+func measure(entries []entry) columns {
+	c := columns{label: 1, source: len(historySource)}
+	for _, e := range entries {
+		c.label = max(c.label, len(e.request.Label()))
+		c.source = max(c.source, len(e.source))
+	}
+	c.label = min(c.label, maxNameWidth)
+	c.source = min(c.source, maxTypeWidth)
+	return c
 }
 
 func newEntry(req requests.Request, source string) entry {
 	// The source is part of the haystack, so that "team" narrows to a collection
 	// and "history" to the sent list without either needing a key of its own.
 	return entry{
-		request:  req,
-		source:   source,
-		haystack: req.Search() + "\n" + strings.ToLower(source),
+		request:     req,
+		source:      source,
+		haystack:    req.Search() + "\n" + strings.ToLower(source),
+		methodWidth: lipgloss.Width(req.Method),
 	}
 }
 
@@ -468,26 +500,24 @@ type layout struct {
 
 // layout measures the browser against everything it holds.
 //
-// The width comes from every entry rather than the visible ones, so that
-// filtering narrows the list without moving the walls around it.
+// The two fixed columns were measured when the entries changed; what is left to
+// do here is the description column, which is the one thing about a row that
+// moves on its own — "3m ago" becomes "4m ago" with nothing having happened.
+// Even that is counted rather than rendered: building a hundred descriptions to
+// throw all but the widest away is three allocations per entry, on every
+// keystroke, for a modal that draws two dozen rows.
 func (r Requests) layout() layout {
 	l := layout{
 		inner:  max(minBoxWidth, lipgloss.Width(listHint)),
-		label:  1,
-		source: len(historySource),
+		label:  r.columns.label,
+		source: r.columns.source,
 	}
 
-	// One pass, not three. The two column widths are the same on every row, so
-	// the widest row is the widest description plus them — no second walk needed
-	// once the maximum description is known.
+	now := r.now()
 	describe := 0
 	for _, e := range r.entries {
-		l.label = max(l.label, len(e.request.Label()))
-		l.source = max(l.source, len(e.source))
-		describe = max(describe, lipgloss.Width(r.describe(e.request)))
+		describe = max(describe, describeWidth(e, now))
 	}
-	l.label = min(l.label, maxNameWidth)
-	l.source = min(l.source, maxTypeWidth)
 
 	// The cursor gutter and one gap per column, the same on every row.
 	const gaps = 2 + 2 + 2
@@ -567,7 +597,28 @@ func (r Requests) describe(req requests.Request) string {
 	if !req.SentAt.IsZero() {
 		parts = append(parts, ago(r.now().Sub(req.SentAt)))
 	}
-	return strings.Join(parts, " · ")
+	return strings.Join(parts, describeSeparator)
+}
+
+// describeSeparator joins the two halves of a description, and separatorWidth
+// is how many cells it takes: the middle dot is two bytes and one cell, which
+// is precisely the difference len() would get wrong.
+const (
+	describeSeparator = " · "
+	separatorWidth    = 3
+)
+
+// describeWidth is how wide [Requests.describe] would be, without building it.
+//
+// It is arithmetic rather than a measurement because the widest description is
+// wanted once per frame and every entry has to be asked. The two are pinned to
+// each other by a test over a table of durations, which is the price of having
+// written the width down twice.
+func describeWidth(e entry, now time.Time) int {
+	if e.request.SentAt.IsZero() {
+		return e.methodWidth
+	}
+	return e.methodWidth + separatorWidth + agoWidth(now.Sub(e.request.SentAt))
 }
 
 // ago renders a duration the way a list wants it read: roughly, in one unit,
@@ -588,6 +639,39 @@ func ago(d time.Duration) string {
 		days := int(d.Hours() / 24)
 		return fmt.Sprintf("%d %s ago", days, plural(days, "day"))
 	}
+}
+
+// agoWidth is the width of [ago] without building the string. Every branch here
+// mirrors one there, and TestAgoWidthMatchesAgo walks a table over both.
+func agoWidth(d time.Duration) int {
+	switch {
+	case d < time.Minute:
+		return len("just now")
+	case d < time.Hour:
+		return digits(int(d.Minutes())) + len("m ago")
+	case d < 24*time.Hour:
+		return digits(int(d.Hours())) + len("h ago")
+	default:
+		// len(plural(days, "day")) would be the obvious thing to write and would
+		// allocate the string this exists to avoid building.
+		days := int(d.Hours() / 24)
+		width := digits(days) + len(" day ago")
+		if days != 1 {
+			width++
+		}
+		return width
+	}
+}
+
+// digits is how many characters %d takes. Only non-negative numbers reach it:
+// a negative duration is reported as "just now" before it gets here.
+func digits(n int) int {
+	width := 1
+	for n >= 10 {
+		n /= 10
+		width++
+	}
+	return width
 }
 
 // available is the widest the box's contents may be on this screen.
