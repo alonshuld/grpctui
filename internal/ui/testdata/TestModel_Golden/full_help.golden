@@ -11,7 +11,6 @@
 ┃                                      ┃│                                                          │
 ┃                                      ┃│                                                          │
 ┃                                      ┃│                                                          │
-┃                                      ┃│                                                          │
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛╰──────────────────────────────────────────────────────────╯
  localhost:50051  •  2 services  •  5 methods 
 ↑/k    up           enter select/edit     a      add item       tab       next panel       r retry
@@ -20,5 +19,6 @@ ctrl+u page up      ←/h   collapse        ctrl+s send           p         conn
 ctrl+d page down    space toggle          ctrl+e end sending    [         older request           
 g      top          H     scroll left     esc    cancel         ]         newer request           
 G      bottom       L     scroll right    ctrl+r requests       e         environments            
-                                          S      save           v         variables               
-                                          ctrl+p capture                                          
+                    w     raw bytes       S      save           v         variables               
+                    D     diff            ctrl+p capture        t         traffic                 
+                                          X      grpcurl                                          

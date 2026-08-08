@@ -94,6 +94,25 @@ type KeyMap struct {
 	// pager, editor and TUI in the neighbourhood uses.
 	Filter key.Binding
 
+	// RawView swaps the response panel between the decoded body and the
+	// protobuf bytes it came from, and Diff between the body and what changed
+	// since the last call to the same method. They are two renderings of one
+	// answer rather than two panels, so they are toggles rather than places to
+	// tab to.
+	RawView key.Binding
+	Diff    key.Binding
+
+	// Export renders the request in the form as a grpcurl command, for sharing
+	// outside grpctui. It is a capital X for the reason Save is a capital S: the
+	// lowercase letters in this range are already scroll and expand keys.
+	Export key.Binding
+
+	// Traffic opens the log of calls the passive proxy has seen. Like the other
+	// modals it has a key of its own rather than a place in the tab cycle —
+	// and unlike them it does nothing at all unless grpctui was started with
+	// --proxy.
+	Traffic key.Binding
+
 	Retry key.Binding
 	Help  key.Binding
 	Quit  key.Binding
@@ -244,6 +263,22 @@ func (k *KeyMap) session() {
 		key.WithKeys("/"),
 		key.WithHelp("/", "filter"),
 	)
+	k.RawView = key.NewBinding(
+		key.WithKeys("w"),
+		key.WithHelp("w", "raw bytes"),
+	)
+	k.Diff = key.NewBinding(
+		key.WithKeys("D"),
+		key.WithHelp("D", "diff"),
+	)
+	k.Export = key.NewBinding(
+		key.WithKeys("X"),
+		key.WithHelp("X", "grpcurl"),
+	)
+	k.Traffic = key.NewBinding(
+		key.WithKeys("t"),
+		key.WithHelp("t", "traffic"),
+	)
 	k.Retry = key.NewBinding(
 		key.WithKeys("r"),
 		key.WithHelp("r", "retry"),
@@ -275,7 +310,9 @@ func (k KeyMap) FullHelp() [][]key.Binding {
 		// Horizontal scrolling shares a column with expand/collapse rather than
 		// taking one of its own: a sixth column pushes the bar past 100 cells,
 		// where it gets truncated and the last one disappears entirely.
-		{k.Select, k.Expand, k.Collapse, k.Toggle, k.ScrollLeft, k.ScrollRight},
+		// The response panel's two alternative renderings sit with the other keys
+		// that change what a panel shows rather than what it holds.
+		{k.Select, k.Expand, k.Collapse, k.Toggle, k.ScrollLeft, k.ScrollRight, k.RawView, k.Diff},
 		// Add and Remove edit the request the way send and cancel run it, and
 		// sharing a column with them keeps the bar at five columns: a sixth pushes
 		// it past 100 cells, where the last one is truncated away entirely.
@@ -285,8 +322,8 @@ func (k KeyMap) FullHelp() [][]key.Binding {
 		// response is the same subject again, and — like everything else here —
 		// costs a row rather than a column, since a column is only ever as wide
 		// as its widest entry.
-		{k.Add, k.Remove, k.Send, k.EndStream, k.Cancel, k.Requests, k.Save, k.Capture},
-		{k.NextPanel, k.PrevPanel, k.Profiles, k.HistoryPrev, k.HistoryNext, k.Environments, k.Variables},
+		{k.Add, k.Remove, k.Send, k.EndStream, k.Cancel, k.Requests, k.Save, k.Capture, k.Export},
+		{k.NextPanel, k.PrevPanel, k.Profiles, k.HistoryPrev, k.HistoryNext, k.Environments, k.Variables, k.Traffic},
 		{k.Retry, k.Help, k.Quit},
 	}
 }

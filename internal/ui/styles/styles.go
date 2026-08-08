@@ -83,6 +83,23 @@ type Styles struct {
 	JSONLiteral lipgloss.Style
 	JSONPunct   lipgloss.Style
 
+	// The two sides of a response diff. They are the success and error colours
+	// rather than a green/red pair of their own: a line that has appeared and a
+	// line that has gone are not good and bad news, but they are the same two
+	// directions every diff a developer reads uses, and reusing the palette
+	// keeps a theme (v0.9) to one place. The gutter carries a + or a -, so the
+	// distinction survives a monochrome terminal.
+	DiffAdded   lipgloss.Style
+	DiffRemoved lipgloss.Style
+
+	// DiffSkipped marks the runs of unchanged lines a collapsed diff leaves out.
+	DiffSkipped lipgloss.Style
+
+	// The raw wire view: the offset column, the bytes, and the ASCII gutter.
+	// Only the offset is dimmed — the bytes are the thing being read.
+	WireOffset lipgloss.Style
+	WireField  lipgloss.Style
+
 	ErrorTitle lipgloss.Style
 	ErrorBody  lipgloss.Style
 	Hint       lipgloss.Style
@@ -139,6 +156,13 @@ func New() Styles {
 		JSONNumber:  lipgloss.NewStyle().Foreground(p.Text),
 		JSONLiteral: lipgloss.NewStyle().Bold(true).Foreground(p.Text),
 		JSONPunct:   lipgloss.NewStyle().Foreground(p.Muted),
+
+		DiffAdded:   lipgloss.NewStyle().Foreground(p.Success),
+		DiffRemoved: lipgloss.NewStyle().Foreground(p.Error),
+		DiffSkipped: lipgloss.NewStyle().Foreground(p.Muted).Italic(true),
+
+		WireOffset: lipgloss.NewStyle().Foreground(p.Muted),
+		WireField:  lipgloss.NewStyle().Foreground(p.Primary),
 
 		ErrorTitle: lipgloss.NewStyle().Bold(true).Foreground(p.Error),
 		ErrorBody:  lipgloss.NewStyle().Foreground(p.Text),

@@ -63,7 +63,7 @@ func TestResponse_Success(t *testing.T) {
 	r := newResponse(t)
 	r.SetInFlight(responseMethod())
 
-	r.SetSuccess("{\n  \"greeting\": \"hi\"\n}", protoschema.FormatJSON, 12*time.Millisecond)
+	r.SetSuccess(panels.Result{Body: "{\n  \"greeting\": \"hi\"\n}", Format: protoschema.FormatJSON, Took: 12 * time.Millisecond})
 
 	assert.False(t, r.InFlight())
 	view := r.View()
@@ -145,7 +145,7 @@ func TestResponse_RewrapsOnResize(t *testing.T) {
 func TestResponse_Clear(t *testing.T) {
 	r := newResponse(t)
 	r.SetMethod(responseMethod())
-	r.SetSuccess(`{"greeting": "hi"}`, protoschema.FormatJSON, time.Millisecond)
+	r.SetSuccess(panels.Result{Body: `{"greeting": "hi"}`, Format: protoschema.FormatJSON, Took: time.Millisecond})
 
 	r.Clear()
 
@@ -158,7 +158,7 @@ func TestResponse_Clear(t *testing.T) {
 // anything on screen.
 func TestResponse_SetMethodDropsTheOldResult(t *testing.T) {
 	r := newResponse(t)
-	r.SetSuccess(`{"greeting": "hi"}`, protoschema.FormatJSON, time.Millisecond)
+	r.SetSuccess(panels.Result{Body: `{"greeting": "hi"}`, Format: protoschema.FormatJSON, Took: time.Millisecond})
 
 	r.SetMethod(responseMethod())
 
@@ -188,7 +188,7 @@ func TestResponse_IgnoresTicksWhenIdle(t *testing.T) {
 	tick, ok := cmd().(spinner.TickMsg)
 	require.True(t, ok)
 
-	r.SetSuccess("{}", protoschema.FormatJSON, time.Millisecond)
+	r.SetSuccess(panels.Result{Body: "{}", Format: protoschema.FormatJSON, Took: time.Millisecond})
 	_, next := r.Update(tick)
 
 	assert.Nil(t, next, "the spinner kept ticking after the call finished")
@@ -204,7 +204,7 @@ func TestResponse_ScrollsALongBody(t *testing.T) {
 	for i := range lines {
 		lines[i] = fmt.Sprintf("line %02d", i)
 	}
-	r.SetSuccess(strings.Join(lines, "\n"), protoschema.FormatJSON, time.Millisecond)
+	r.SetSuccess(panels.Result{Body: strings.Join(lines, "\n"), Format: protoschema.FormatJSON, Took: time.Millisecond})
 
 	top := r.View()
 	r, _ = r.Update(keyMsg("j"))
@@ -232,7 +232,7 @@ func TestResponse_ScrollsALineWiderThanThePanel(t *testing.T) {
 	r := newResponse(t)
 	r.SetSize(30, 8)
 	r.Focus()
-	r.SetSuccess(`{"detail": "`+strings.Repeat("x", 80)+tail+`"}`, protoschema.FormatJSON, time.Millisecond)
+	r.SetSuccess(panels.Result{Body: `{"detail": "` + strings.Repeat("x", 80) + tail + `"}`, Format: protoschema.FormatJSON, Took: time.Millisecond})
 
 	require.NotContains(t, r.View(), tail, "the line was expected to start off screen")
 
@@ -253,7 +253,7 @@ func TestResponse_ScrollsHorizontallyWithShiftArrows(t *testing.T) {
 	r := newResponse(t)
 	r.SetSize(30, 8)
 	r.Focus()
-	r.SetSuccess(strings.Repeat("x", 80)+tail, protoschema.FormatJSON, time.Millisecond)
+	r.SetSuccess(panels.Result{Body: strings.Repeat("x", 80) + tail, Format: protoschema.FormatJSON, Took: time.Millisecond})
 
 	for range 20 {
 		r, _ = r.Update(keyMsg("shift+right"))
@@ -267,14 +267,14 @@ func TestResponse_ClearResetsTheHorizontalOffset(t *testing.T) {
 	r := newResponse(t)
 	r.SetSize(30, 8)
 	r.Focus()
-	r.SetSuccess(strings.Repeat("x", 80)+"TAIL", protoschema.FormatJSON, time.Millisecond)
+	r.SetSuccess(panels.Result{Body: strings.Repeat("x", 80) + "TAIL", Format: protoschema.FormatJSON, Took: time.Millisecond})
 
 	for range 20 {
 		r, _ = r.Update(keyMsg("L"))
 	}
 	require.Contains(t, r.View(), "TAIL")
 
-	r.SetSuccess(`{"greeting": "hi"}`, protoschema.FormatJSON, time.Millisecond)
+	r.SetSuccess(panels.Result{Body: `{"greeting": "hi"}`, Format: protoschema.FormatJSON, Took: time.Millisecond})
 
 	assert.Contains(t, r.View(), `{"greeting": "hi"}`)
 }
@@ -299,8 +299,7 @@ func TestResponse_FailureWithAStatusButNoMessage(t *testing.T) {
 func TestResponse_SaysWhenTheBodyIsNotJSON(t *testing.T) {
 	r := newResponse(t)
 
-	r.SetSuccess(`type_url:"type.googleapis.com/some.server.only.Detail"`,
-		protoschema.FormatText, 4*time.Millisecond)
+	r.SetSuccess(panels.Result{Body: `type_url:"type.googleapis.com/some.server.only.Detail"`, Format: protoschema.FormatText, Took: 4 * time.Millisecond})
 
 	view := r.View()
 	assert.Contains(t, view, "OK", "a call that came back is a success whatever its body looks like")
@@ -311,7 +310,7 @@ func TestResponse_SaysWhenTheBodyIsNotJSON(t *testing.T) {
 func TestResponse_SaysNothingAboutFormatForJSON(t *testing.T) {
 	r := newResponse(t)
 
-	r.SetSuccess(`{"greeting": "hi"}`, protoschema.FormatJSON, time.Millisecond)
+	r.SetSuccess(panels.Result{Body: `{"greeting": "hi"}`, Format: protoschema.FormatJSON, Took: time.Millisecond})
 
 	assert.NotContains(t, r.View(), "protobuf text")
 }
@@ -329,7 +328,7 @@ func TestResponse_HighlightingLeavesTheBodyIntact(t *testing.T) {
 	for format, body := range bodies {
 		t.Run(string(format), func(t *testing.T) {
 			r := newResponse(t)
-			r.SetSuccess(body, format, time.Millisecond)
+			r.SetSuccess(panels.Result{Body: body, Format: format, Took: time.Millisecond})
 
 			view := r.View()
 			for line := range strings.SplitSeq(body, "\n") {
@@ -436,7 +435,7 @@ func TestResponse_StreamFinishesWithoutAStatus(t *testing.T) {
 // unary result with a verdict about a stream that never ran.
 func TestResponse_FinishStreamIgnoresANonStream(t *testing.T) {
 	r := newResponse(t)
-	r.SetSuccess(`{"greeting": "hello"}`, protoschema.FormatJSON, time.Millisecond)
+	r.SetSuccess(panels.Result{Body: `{"greeting": "hello"}`, Format: protoschema.FormatJSON, Took: time.Millisecond})
 
 	r.FinishStream("", grpcclient.CallStatus{}, false, time.Second)
 

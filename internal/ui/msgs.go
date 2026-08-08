@@ -5,6 +5,7 @@ import (
 
 	"github.com/alonshuld/grpctui/internal/grpcclient"
 	"github.com/alonshuld/grpctui/internal/protoschema"
+	"github.com/alonshuld/grpctui/internal/proxy"
 	"github.com/alonshuld/grpctui/internal/requests"
 )
 
@@ -116,6 +117,11 @@ type callFinishedMsg struct {
 	// one belongs to a call the user has moved on from and is dropped.
 	seq int
 
+	// method is the fully-qualified name the call was made against. It comes
+	// back with the answer so the model can look up what the same method said
+	// last time without having to remember what it asked for.
+	method string
+
 	// body is the rendered response, set only on success, and format says how it
 	// was rendered — JSON unless the message left no other option.
 	body   string
@@ -127,5 +133,22 @@ type callFinishedMsg struct {
 	status    grpcclient.CallStatus
 	hasStatus bool
 
+	// wire is the response's protobuf encoding, for the raw view, and timing
+	// gRPC's own breakdown of where the call's time went. Either may be empty:
+	// a message that would not re-encode has no raw view, and a client that
+	// measures nothing has no breakdown.
+	wire   []byte
+	timing grpcclient.Timing
+
 	duration time.Duration
+}
+
+// trafficEventMsg carries one event off the passive proxy, or the end of them.
+//
+// ok is false when the channel has closed, which is how the proxy stopping ends
+// the read loop — the same shape a stream's io.EOF has, spelled differently
+// because a channel has no error to report.
+type trafficEventMsg struct {
+	event proxy.Event
+	ok    bool
 }

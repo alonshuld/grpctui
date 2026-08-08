@@ -20,6 +20,7 @@ import (
 	"github.com/alonshuld/grpctui/internal/config"
 	"github.com/alonshuld/grpctui/internal/grpcclient"
 	"github.com/alonshuld/grpctui/internal/logging"
+	"github.com/alonshuld/grpctui/internal/proxy"
 	"github.com/alonshuld/grpctui/internal/requests"
 	"github.com/alonshuld/grpctui/internal/ui"
 	"github.com/alonshuld/grpctui/internal/vars"
@@ -81,6 +82,11 @@ type options struct {
 
 	// historyLimit caps how many sent requests are kept.
 	historyLimit int
+
+	// proxy is the address to accept proxied gRPC traffic on, or empty for no
+	// passive mode. Everything it receives is forwarded to the target and shown
+	// in the traffic panel.
+	proxy string
 
 	// given records which flags were actually passed, which is the difference
 	// between "the user asked for plaintext" and "the user said nothing about
@@ -493,7 +499,7 @@ func start(opts options, startup startup, envs environs, saved saved, logger *za
 		zap.String("version", version.Version()),
 	)
 
-	model := ui.New(client,
+	uiOpts := []ui.Option{
 		ui.WithLogger(logger),
 		ui.WithContext(ctx),
 		ui.WithCallTimeout(opts.callTimeout),
@@ -502,7 +508,18 @@ func start(opts options, startup startup, envs environs, saved saved, logger *za
 		ui.WithEnvironments(envs.list, envs.active),
 		ui.WithHistory(saved.history),
 		ui.WithCollections(saved.collections),
-	)
+	}
+
+	if opts.proxy != "" {
+		watcher, stopProxy, err := startProxy(opts.proxy, startup.profile(), logger)
+		if err != nil {
+			return err
+		}
+		defer stopProxy()
+		uiOpts = append(uiOpts, ui.WithTraffic(watcher.Events(), watcher.Addr(), watcher.Dropped))
+	}
+
+	model := ui.New(client, uiOpts...)
 	program := tea.NewProgram(model,
 		tea.WithContext(ctx),
 		tea.WithOutput(out),
@@ -521,6 +538,56 @@ func start(opts options, startup startup, envs environs, saved saved, logger *za
 		return fmt.Errorf("run ui: %w", runErr)
 	}
 	return nil
+}
+
+// startProxy binds the passive proxy and starts serving, returning it and the
+// way to shut it down.
+//
+// The connection it forwards over carries the profile's *security* and none of
+// its credentials. A passive proxy exists to show what an application is
+// sending, and one that quietly added grpctui's own bearer token would be
+// showing the user something the application never sent — which is the one
+// thing a wire-watching tool may not do.
+//
+// It is pinned to the target grpctui started on. Switching connection or
+// environment in the UI moves the calls the user makes; where the proxy
+// forwards to is decided once, because an application pointed at it has no way
+// to know that its destination changed underneath it.
+func startProxy(listen string, p grpcclient.Profile, logger *zap.Logger) (*proxy.Proxy, func(), error) {
+	upstream, err := grpcclient.DialProfile(grpcclient.Profile{
+		Target:   p.Target,
+		Security: p.Security,
+	}, grpcclient.WithLogger(logger))
+	if err != nil {
+		return nil, nil, fmt.Errorf("proxy upstream: %w", err)
+	}
+
+	watcher := proxy.New(listen, upstream.Conn(), proxy.WithLogger(logger))
+	if err := watcher.Listen(); err != nil {
+		_ = upstream.Close()
+		return nil, nil, err
+	}
+
+	// Serving runs for the life of the program. Its error is logged rather than
+	// returned: by the time it happens the TUI owns the terminal, and a proxy
+	// that has stopped is not a reason to take the session down — the traffic
+	// panel simply stops filling.
+	go func() {
+		if err := watcher.Serve(); err != nil {
+			logger.Error("the proxy stopped", zap.Error(err))
+		}
+	}()
+
+	logger.Info("proxying",
+		zap.String("listen", watcher.Addr()),
+		zap.String("upstream", p.Target),
+		zap.String("security", p.Security.Mode()),
+	)
+
+	return watcher, func() {
+		watcher.Stop()
+		_ = upstream.Close()
+	}, nil
 }
 
 // dialer opens connections for the UI's profile switcher.
@@ -577,6 +644,8 @@ func parseFlags(args []string, stderr io.Writer) (options, error) {
 		"how many sent requests to keep")
 	fs.StringVar(&opts.collectionsDir, "collections", requests.DefaultCollectionsDir(),
 		"read and write saved request collections in this `directory`; empty disables saving")
+	fs.StringVar(&opts.proxy, "proxy", "",
+		"accept gRPC traffic on this `address` and forward it to the target, logging what goes past")
 	fs.BoolVar(&opts.showVersion, "version", false, "print the version and exit")
 
 	fs.Usage = func() {

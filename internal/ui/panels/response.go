@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/alonshuld/grpctui/internal/diff"
 	"github.com/alonshuld/grpctui/internal/grpcclient"
 	"github.com/alonshuld/grpctui/internal/protoschema"
 	"github.com/alonshuld/grpctui/internal/ui/keys"
@@ -44,6 +45,60 @@ const (
 	// a message on it: the sending half closing, the call ending.
 	streamNote
 )
+
+// responseView is which rendering of the answer the panel is showing.
+//
+// They are three views of one result rather than three panels: the body, the
+// bytes it was encoded from, and what changed since the last call to the same
+// method. Switching between them keeps the result — pressing w twice puts you
+// back where you were, with the same response still on screen.
+type responseView int
+
+const (
+	// viewDecoded is the JSON body, which is what the panel has always shown.
+	viewDecoded responseView = iota
+
+	// viewRaw is the protobuf encoding: a field-by-field listing of what is on
+	// the wire, and a hex dump underneath. It is the view for the case the
+	// decoded one cannot answer — a field the server set that this client's
+	// descriptor does not have, a string that is not the string you expected.
+	viewRaw
+
+	// viewDiff is what changed between this response and the previous one for
+	// the same method, which is how you tell "the bug is back" from "the bug
+	// moved".
+	viewDiff
+)
+
+// diffContext is how many unchanged lines are kept either side of a change. Two
+// is enough to see which object a changed field belongs to without turning the
+// diff back into the whole body.
+const diffContext = 2
+
+// Result is one finished unary call, as the panel shows it.
+//
+// It is a struct rather than five parameters because the last three arrived
+// together in v0.8 and are all optional: a client that measures nothing, a
+// message that could not be re-encoded, and a method called for the first time
+// each leave one of them empty, and the panel copes with all three.
+type Result struct {
+	// Body is the rendered response and Format how it was rendered.
+	Body   string
+	Format protoschema.Format
+
+	// Wire is the response's protobuf encoding, for the raw view. Empty means
+	// there is nothing to show there — see [protoschema.Wire].
+	Wire []byte
+
+	// Previous is the body of the last response to the same method, for the
+	// diff view. Empty means this is the first.
+	Previous string
+
+	// Took is the wall time around the call, and Timing gRPC's own breakdown of
+	// it. An unmeasured Timing leaves the status line saying only the total.
+	Took   time.Duration
+	Timing grpcclient.Timing
+}
 
 // maxStreamEntries is how many lines of the log the panel keeps.
 //
@@ -101,6 +156,19 @@ type Response struct {
 	rendered string
 	format   protoschema.Format
 	duration time.Duration
+
+	// view is which of the three renderings is on screen, wire the bytes the
+	// raw one shows, previous the body the diff one compares against, and
+	// timing where the call's time went.
+	//
+	// The view deliberately survives a new response: somebody watching a field
+	// change across three calls has said, by pressing D, that the diff is what
+	// they want to see, and putting them back in the decoded body on every send
+	// would make the feature unusable for the thing it is for.
+	view     responseView
+	wire     []byte
+	previous string
+	timing   grpcclient.Timing
 
 	// entries is the stream log, oldest first, and dropped counts the entries
 	// that fell off the front of it. sent and received count every message the
@@ -173,6 +241,9 @@ func (r *Response) Clear() {
 	r.status = grpcclient.CallStatus{}
 	r.hasCode = false
 	r.duration = 0
+	r.wire = nil
+	r.previous = ""
+	r.timing = grpcclient.Timing{}
 	r.entries = nil
 	r.dropped = 0
 	r.sent = 0
@@ -340,27 +411,59 @@ func (r Response) StreamSummary() (string, bool) {
 	return r.counts() + " " + formatDuration(r.duration), true
 }
 
-// SetSuccess shows a decoded response body. format is how that body was
+// SetSuccess shows a finished call. [Result.Format] is how the body was
 // rendered: anything but [protoschema.FormatJSON] is called out on the status
 // line, because a user who asked for JSON and got something else is owed an
 // explanation rather than left to wonder.
-func (r *Response) SetSuccess(body string, format protoschema.Format, took time.Duration) {
+func (r *Response) SetSuccess(result Result) {
 	r.Clear()
 	r.state = responseOK
-	r.body = body
-	r.format = format
-	r.duration = took
+	r.body = result.Body
+	r.format = result.Format
+	r.duration = result.Took
+	r.wire = result.Wire
+	r.previous = result.Previous
+	r.timing = result.Timing
 
 	// Only JSON is highlighted. protobuf's text format is a different language,
 	// and colouring it by JSON's rules would put emphasis in the wrong places.
-	r.rendered = body
-	if format == protoschema.FormatJSON {
-		r.rendered = r.styles.HighlightJSON(body)
+	r.rendered = result.Body
+	if result.Format == protoschema.FormatJSON {
+		r.rendered = r.styles.HighlightJSON(result.Body)
 	}
 
 	r.setBody()
 	r.viewport.GotoTop()
 }
+
+// ToggleRaw swaps between the decoded body and the bytes behind it.
+func (r *Response) ToggleRaw() { r.setView(viewRaw) }
+
+// ToggleDiff swaps between the decoded body and what changed since the previous
+// response to the same method.
+func (r *Response) ToggleDiff() { r.setView(viewDiff) }
+
+// setView switches to a rendering, or back to the decoded body when it is
+// already showing.
+//
+// The viewport goes back to the top on a switch. The three renderings have
+// nothing to do with each other line for line, so carrying an offset across
+// would land the user in the middle of something they have not read.
+func (r *Response) setView(view responseView) {
+	if r.view == view {
+		view = viewDecoded
+	}
+	r.view = view
+	r.setBody()
+	r.viewport.GotoTop()
+	r.viewport.SetXOffset(0)
+}
+
+// Wire is the response's protobuf encoding, or nil when there is none.
+func (r Response) Wire() []byte { return r.wire }
+
+// Timing is where the last call's time went.
+func (r Response) Timing() grpcclient.Timing { return r.timing }
 
 // SetFailure shows a failed call. status is the gRPC status the call came back
 // with, if it reached the wire at all; message is the raw error text, shown
@@ -396,6 +499,10 @@ func (r *Response) SetFailure(message string, status grpcclient.CallStatus, hasS
 // silently truncates whatever now runs past the edge.
 func (r *Response) setBody() {
 	switch {
+	case r.view == viewRaw:
+		r.viewport.SetContent(r.rawView())
+	case r.view == viewDiff:
+		r.viewport.SetContent(r.diffView())
 	case len(r.entries) > 0:
 		// A stream log outlives the state that built it: a finished stream still
 		// shows every message it carried, so the log wins over the single-body
@@ -405,6 +512,106 @@ func (r *Response) setBody() {
 		r.viewport.SetContent(styles.Wrap(r.body, r.viewport.Width))
 	default:
 		r.viewport.SetContent(r.rendered)
+	}
+}
+
+// rawView renders the response's protobuf encoding: the fields as a decoder
+// without a schema sees them, then a hex dump of the same bytes.
+//
+// Both halves earn their place. The field listing answers "what did the server
+// actually put on the wire", which is the question that survives a descriptor
+// disagreeing with reality; the hex dump answers "what exactly", which is the
+// one you fall back to when the listing itself looks wrong.
+func (r Response) rawView() string {
+	if len(r.wire) == 0 {
+		return r.styles.Muted.Render("There are no bytes to show for this response.")
+	}
+
+	lines := []string{r.styles.Muted.Render(
+		protoschema.ByteCount(len(r.wire)) + " · as re-encoded from the decoded message")}
+
+	fields, err := protoschema.WireFields(r.wire)
+	for _, f := range fields {
+		lines = append(lines, styles.Truncate(fmt.Sprintf("%s  %s  %s",
+			r.styles.WireField.Render(fmt.Sprintf("%3d", f.Number)),
+			r.styles.Muted.Render(padCell(f.Type, wireTypeWidth)),
+			f.Value), r.width))
+	}
+	if err != nil {
+		// The fields read so far are still above; this says where reading
+		// stopped, which on a malformed body is the interesting part.
+		lines = append(lines, r.styles.FieldError.Render(err.Error()))
+	}
+
+	dump := protoschema.Hexdump(r.wire, r.bytesPerLine())
+	return strings.Join(append(lines, "", dump), "\n")
+}
+
+// wireTypeWidth is the width of the wire-type column, enough for the longest
+// name ("32-bit") so the values beside it line up.
+const wireTypeWidth = 7
+
+// bytesPerLine is how many bytes the hex dump puts on a row: as many as fit,
+// halving down from sixteen so that the columns stay a power of two and a byte
+// offset can still be read off the row.
+func (r Response) bytesPerLine() int {
+	// Each byte costs three cells of hex and one of ASCII; the rest is the
+	// offset column, the two gaps and the ASCII gutter's bars.
+	const chrome = 13
+
+	for _, n := range []int{16, 8, 4} {
+		if chrome+4*n <= r.width {
+			return n
+		}
+	}
+	return 4
+}
+
+// diffView renders what changed since the previous response to this method.
+func (r Response) diffView() string {
+	if r.body == "" {
+		return r.styles.Muted.Render("There is no response to compare.")
+	}
+	if r.previous == "" {
+		return r.styles.Muted.Render(
+			"This is the first response from " + r.method.Name + ". Send it again to compare.")
+	}
+
+	lines, skips := diff.Unified(r.previous, r.body, diffContext)
+
+	// The skips are indexed against the returned lines, so they are consumed in
+	// order as the lines are walked rather than searched for per line.
+	out := make([]string, 0, len(lines)+len(skips)+1)
+	next := 0
+	for i, line := range lines {
+		for next < len(skips) && skips[next].At == i {
+			out = append(out, r.styles.DiffSkipped.Render(fmt.Sprintf("  … %d unchanged %s",
+				skips[next].Lines, plural(skips[next].Lines, "line"))))
+			next++
+		}
+		out = append(out, r.diffLine(line))
+	}
+	for ; next < len(skips); next++ {
+		out = append(out, r.styles.DiffSkipped.Render(fmt.Sprintf("  … %d unchanged %s",
+			skips[next].Lines, plural(skips[next].Lines, "line"))))
+	}
+
+	if len(out) == 0 {
+		return r.styles.Muted.Render("This response is identical to the previous one.")
+	}
+	return strings.Join(out, "\n")
+}
+
+// diffLine renders one line of the diff, with the marker in the gutter that
+// makes it readable without colour.
+func (r Response) diffLine(line diff.Line) string {
+	switch line.Op {
+	case diff.Insert:
+		return r.styles.DiffAdded.Render("+ " + line.Text)
+	case diff.Delete:
+		return r.styles.DiffRemoved.Render("- " + line.Text)
+	default:
+		return r.styles.Muted.Render("  " + line.Text)
 	}
 }
 
@@ -540,19 +747,37 @@ func (r Response) statusLine() string {
 		return styles.Truncate(line, r.width)
 
 	case r.state == responseOK:
-		line := r.styles.StatusOK.Render("OK") + "  " + r.styles.Muted.Render(r.timing())
+		line := r.styles.StatusOK.Render("OK") + "  " + r.styles.Muted.Render(r.durationText())
 		if r.format != protoschema.FormatJSON {
 			line += "  " + r.styles.Muted.Render("· protobuf text (unknown Any type)")
 		}
-		return styles.Truncate(line, r.width)
+		return styles.Truncate(line+r.viewNote(), r.width)
 
 	case r.hasCode:
 		return styles.Truncate(
-			r.styles.StatusError.Render(r.status.CodeName())+"  "+r.styles.Muted.Render(r.timing()), r.width)
+			r.styles.StatusError.Render(r.status.CodeName())+"  "+
+				r.styles.Muted.Render(r.durationText())+r.viewNote(), r.width)
 
 	default:
 		return styles.Truncate(
-			r.styles.StatusError.Render("Call failed")+"  "+r.styles.Muted.Render(r.timing()), r.width)
+			r.styles.StatusError.Render("Call failed")+"  "+
+				r.styles.Muted.Render(r.durationText())+r.viewNote(), r.width)
+	}
+}
+
+// viewNote says which rendering is on screen, when it is not the ordinary one.
+//
+// Without it a raw or diff view is a panel showing something that is not the
+// response, with nothing to say so — and the two are easy to leave switched on
+// and then be confused by several calls later.
+func (r Response) viewNote() string {
+	switch r.view {
+	case viewRaw:
+		return "  " + r.styles.WireField.Render("· raw bytes")
+	case viewDiff:
+		return "  " + r.styles.WireField.Render("· diff vs previous")
+	default:
+		return ""
 	}
 }
 
@@ -566,13 +791,26 @@ func (r Response) watchLabel() string {
 	return "Streaming"
 }
 
-// timing renders what to say about a finished call's duration: a stream reports
-// its length and how much it carried, a unary call just its duration.
-func (r Response) timing() string {
-	if len(r.entries) == 0 {
+// durationText renders what to say about a finished call's duration: a stream
+// reports its length and how much it carried, a unary call its duration and —
+// when gRPC measured one — where that duration went.
+func (r Response) durationText() string {
+	if len(r.entries) > 0 {
+		return r.counts() + "  " + formatDuration(r.duration)
+	}
+	if !r.timing.Measured() {
 		return formatDuration(r.duration)
 	}
-	return r.counts() + "  " + formatDuration(r.duration)
+
+	// Total first, breakdown after: the parts are what you read when the total
+	// surprises you, so they are the half a narrow panel may truncate away.
+	return formatDuration(r.duration) + "  · " + strings.Join([]string{
+		"connect " + formatDuration(r.timing.Connect),
+		"first byte " + formatDuration(r.timing.FirstByte),
+		"total " + formatDuration(r.timing.Total),
+		protoschema.ByteCount(r.timing.RequestBytes) + " out",
+		protoschema.ByteCount(r.timing.ResponseBytes) + " in",
+	}, " · ")
 }
 
 // counts renders the two message tallies, in the same arrows the log uses.
