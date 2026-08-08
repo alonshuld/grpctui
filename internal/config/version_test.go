@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -52,7 +53,11 @@ func TestLoad_Version(t *testing.T) {
 			if tt.wantErr != "" {
 				require.Error(t, err)
 				require.ErrorContains(t, err, tt.wantErr)
-				assert.ErrorContains(t, err, path, "the error has to name the file it is about")
+				// Quoted, the way every path in an error from this package is —
+				// which on Windows is not the same string as the path itself,
+				// since %q doubles the separators.
+				assert.ErrorContains(t, err, strconv.Quote(path),
+					"the error has to name the file it is about")
 				return
 			}
 

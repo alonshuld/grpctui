@@ -3,6 +3,7 @@ package requests_test
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -101,7 +102,9 @@ func TestLoadHistory_LaterVersion(t *testing.T) {
 
 	require.Error(t, err)
 	require.ErrorIs(t, err, format.ErrUnsupported)
-	require.ErrorContains(t, err, path)
+	// Quoted, as every path in an error from this package is — on Windows that
+	// is not the same string as the path, since %q doubles the separators.
+	require.ErrorContains(t, err, strconv.Quote(path))
 }
 
 // TestLoadCollections_UnknownKeyWithoutAVersionStillFails pins that the version
