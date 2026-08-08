@@ -24,7 +24,10 @@ func resolve(t *testing.T, args ...string) (startup, error) {
 	cfg, err := loadConfig(opts)
 	require.NoError(t, err)
 
-	return connections(cfg, opts)
+	envs, err := environments(cfg, opts)
+	require.NoError(t, err)
+
+	return connections(cfg, opts, envs.target())
 }
 
 // active is the profile a set of arguments would connect with.

@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"github.com/alonshuld/grpctui/internal/logging"
 	"github.com/alonshuld/grpctui/internal/requests"
 	"github.com/alonshuld/grpctui/internal/ui"
+	"github.com/alonshuld/grpctui/internal/vars"
 	"github.com/alonshuld/grpctui/internal/version"
 )
 
@@ -46,6 +48,12 @@ type options struct {
 	// profile names the connection profile to start on, from the config file's
 	// `profiles` list.
 	profile string
+
+	// env names the environment to start in, from the config file's
+	// `environments` list, and variables are the `name=value` bindings the
+	// command line adds on top of it.
+	env       string
+	variables assignmentList
 
 	// The transport security flags. Each overrides the chosen profile's
 	// setting, so that a saved connection can be reached over a different CA or
@@ -97,6 +105,40 @@ func (h *headerList) Set(value string) error {
 	return nil
 }
 
+// assignmentList collects a repeatable -V flag.
+//
+// It is separate from [headerList] only so that -V's names can be checked as
+// they are given: a mistyped variable name is silent otherwise, since a
+// reference to a name nothing binds is refused at the row rather than at
+// startup, and by then the flag is long out of sight.
+type assignmentList []string
+
+// String implements [flag.Value]. Only the names are printed: a -V is as likely
+// to carry a token as a -H is, and this ends up in usage output and error
+// messages.
+func (a *assignmentList) String() string {
+	names := make([]string, 0, len(*a))
+	for _, v := range *a {
+		name, _, _ := vars.SplitAssignment(v)
+		names = append(names, name)
+	}
+	return strings.Join(names, ", ")
+}
+
+// Set implements [flag.Value].
+func (a *assignmentList) Set(value string) error {
+	name, _, ok := vars.SplitAssignment(value)
+	if !ok {
+		return fmt.Errorf("want `name=value`, got %q", value)
+	}
+	if err := vars.ValidateName(name); err != nil {
+		return err
+	}
+
+	*a = append(*a, value)
+	return nil
+}
+
 func run(args []string, stdout, stderr io.Writer) int {
 	opts, err := parseFlags(args, stderr)
 	switch {
@@ -118,7 +160,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitError
 	}
 
-	startup, err := connections(cfg, opts)
+	envs, err := environments(cfg, opts)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "grpctui: %v\n", err)
+		return exitError
+	}
+
+	startup, err := connections(cfg, opts, envs.target())
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "grpctui: %v\n", err)
 		return exitError
@@ -142,7 +190,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	defer func() { _ = closeLog() }()
 
-	if err := start(opts, startup, saved, logger, stdout); err != nil {
+	if err := start(opts, startup, envs, saved, logger, stdout); err != nil {
 		logger.Error("exiting with error", zap.Error(err))
 		_, _ = fmt.Fprintf(stderr, "grpctui: %v\n", err)
 		return exitError
@@ -166,12 +214,108 @@ type startup struct {
 	active int
 }
 
+// environs is everything the flags and the config file decide about variables:
+// the environments available, which one to start in, and why any of the others
+// cannot be used.
+type environs struct {
+	list []vars.Environment
+
+	// problems runs parallel to list, exactly as [startup.problems] does: an
+	// environment naming a ${VAR} nobody exported is listed and refused when it
+	// is chosen, rather than taking the whole file down at startup.
+	problems []error
+
+	// active indexes list, or is -1 when no environments are configured — which
+	// is the ordinary case, and resolves nothing.
+	active int
+}
+
+// environments assembles the variable sets and says which one to start in.
+//
+// A -V binding is laid over *every* environment rather than only the active
+// one. It is an override the user typed for this session, and having it vanish
+// on switching environment would make it a surprise rather than an override.
+func environments(cfg config.Config, opts options) (environs, error) {
+	var e environs
+	e.list, e.problems = cfg.Environments()
+
+	active, err := config.SelectEnvironment(e.list, opts.env)
+	if err != nil {
+		return environs{}, err
+	}
+	e.active = active
+
+	// The environment actually being used has to work now, so its problem is
+	// raised here rather than deferred to a switch nobody has asked for yet.
+	if active >= 0 {
+		if err := e.problems[active]; err != nil {
+			return environs{}, err
+		}
+	}
+
+	overrides, err := parseAssignments(opts.variables)
+	if err != nil {
+		return environs{}, err
+	}
+	if len(overrides) == 0 {
+		return e, nil
+	}
+
+	// With no environments configured at all, the command line's bindings are
+	// still worth having, so they become one.
+	if len(e.list) == 0 {
+		e.list = []vars.Environment{{Name: commandLineEnvironment}}
+		e.problems = []error{nil}
+		e.active = 0
+	}
+	for i := range e.list {
+		e.list[i].Variables = vars.NewSet(append(
+			slices.Clone(e.list[i].Variables), overrides...)).All()
+	}
+	return e, nil
+}
+
+// commandLineEnvironment is what the -V bindings are called when there is no
+// environment in the config file for them to sit in.
+const commandLineEnvironment = "command line"
+
+// environment is the variable set to start with, or the zero one when none are
+// configured.
+func (e environs) environment() vars.Environment {
+	if e.active < 0 || e.active >= len(e.list) {
+		return vars.Environment{}
+	}
+	return e.list[e.active]
+}
+
+// target is the address the starting environment points at, if it names one.
+func (e environs) target() string { return e.environment().Target }
+
+// parseAssignments reads the -V flags. Their form is already checked as they
+// are given — see [assignmentList.Set] — so this only splits them.
+func parseAssignments(values []string) ([]vars.Variable, error) {
+	out := make([]vars.Variable, 0, len(values))
+	for _, v := range values {
+		name, value, ok := vars.SplitAssignment(v)
+		if !ok {
+			return nil, fmt.Errorf("variable %q: want `name=value`", v)
+		}
+		out = append(out, vars.Variable{Name: name, Value: value})
+	}
+	return out, nil
+}
+
 // connections assembles the connection profiles and says which one to start on.
 //
 // The flags override the chosen profile rather than replacing it: `grpctui
 // --profile staging --insecure` is a saved connection with verification turned
 // off for one session, not a new connection that has lost its credentials.
-func connections(cfg config.Config, opts options) (startup, error) {
+//
+// envTarget is where the starting environment points, which sits between the
+// profile and the command line: a profile says how to reach a server, an
+// environment says which server, and a target typed on the command line is the
+// most specific thing the user could have said.
+func connections(cfg config.Config, opts options, envTarget string) (startup, error) {
 	var s startup
 	s.profiles, s.problems = cfg.Connections()
 
@@ -194,6 +338,9 @@ func connections(cfg config.Config, opts options) (startup, error) {
 		return startup{}, err
 	}
 
+	if envTarget != "" {
+		s.profiles[active].Target = envTarget
+	}
 	if s.profiles[active], err = applyFlags(s.profiles[active], opts); err != nil {
 		return startup{}, err
 	}
@@ -325,7 +472,7 @@ func loadRequests(opts options) (saved, error) {
 
 // start runs the TUI. Everything it writes goes to out, which is the terminal
 // bubbletea takes over; the logger writes to a file only.
-func start(opts options, startup startup, saved saved, logger *zap.Logger, out io.Writer) error {
+func start(opts options, startup startup, envs environs, saved saved, logger *zap.Logger, out io.Writer) error {
 	// SIGINT/SIGTERM cancel in-flight RPCs; bubbletea handles ctrl+c itself,
 	// so this covers signals sent from elsewhere.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -336,9 +483,13 @@ func start(opts options, startup startup, saved saved, logger *zap.Logger, out i
 		return err
 	}
 
+	// Variable names, never their values: this log outlives the session, and a
+	// value captured out of a login response is a token.
 	logger.Info("starting grpctui",
 		zap.String("target", startup.profile().Target),
 		zap.String("profile", startup.profile().Label()),
+		zap.String("environment", envs.environment().Name),
+		zap.Strings("variables", envs.environment().Set().Names()),
 		zap.String("version", version.Version()),
 	)
 
@@ -348,6 +499,7 @@ func start(opts options, startup startup, saved saved, logger *zap.Logger, out i
 		ui.WithCallTimeout(opts.callTimeout),
 		ui.WithDialer(startup.dialer(logger)),
 		ui.WithProfiles(startup.profiles, startup.active),
+		ui.WithEnvironments(envs.list, envs.active),
 		ui.WithHistory(saved.history),
 		ui.WithCollections(saved.collections),
 	)
@@ -395,6 +547,10 @@ func parseFlags(args []string, stderr io.Writer) (options, error) {
 		"read settings from this file; empty skips it")
 	fs.StringVar(&opts.profile, "profile", "",
 		"connection profile to start on; defaults to the first configured")
+	fs.StringVar(&opts.env, "env", "",
+		"environment to start in; defaults to the first configured")
+	fs.Var(&opts.variables, "V",
+		"variable as `name=value`, referred to as {{name}} in a request; repeatable")
 	fs.BoolVar(&opts.tls, "tls", false,
 		"connect over TLS; implied by -cacert, -cert, -key, -servername and -insecure")
 	fs.StringVar(&opts.caCert, "cacert", "",
@@ -426,9 +582,9 @@ func parseFlags(args []string, stderr io.Writer) (options, error) {
 	fs.Usage = func() {
 		_, _ = fmt.Fprintf(stderr, "grpctui — a terminal UI for gRPC\n\n")
 		_, _ = fmt.Fprintf(stderr, "Usage:\n  grpctui [flags] <host:port>\n\n"+
-			"The target may also come from the config file — its `target` key, or\n"+
-			"the profile named by -profile — in which case it can be left off the\n"+
-			"command line.\n\nFlags:\n")
+			"The target may also come from the config file — its `target` key, the\n"+
+			"profile named by -profile, or the environment named by -env — in which\n"+
+			"case it can be left off the command line.\n\nFlags:\n")
 		fs.PrintDefaults()
 	}
 	opts.usage = fs.Usage
