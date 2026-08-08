@@ -108,9 +108,10 @@ func (md Metadata) Clone() Metadata {
 	return out
 }
 
-// Keys lists the enabled header names. It exists for logging: the names of the
-// headers on a call are useful in a log, and the values — bearer tokens, API
-// keys — must never be.
+// Keys lists the enabled header names. It exists for everything that records a
+// call without being the call: the log, and since v0.6 the history and
+// collection files. The names of the headers on a call are useful there, and
+// the values — bearer tokens, API keys — must never be.
 func (md Metadata) Keys() []string {
 	keys := make([]string, 0, len(md))
 	for _, h := range md {

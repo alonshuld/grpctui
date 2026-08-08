@@ -455,6 +455,8 @@ func keyMsg(k string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyCtrlS}
 	case "ctrl+e":
 		return tea.KeyMsg{Type: tea.KeyCtrlE}
+	case "ctrl+r":
+		return tea.KeyMsg{Type: tea.KeyCtrlR}
 	case "backspace":
 		return tea.KeyMsg{Type: tea.KeyBackspace}
 	default:
@@ -1192,6 +1194,17 @@ func TestModel_SurvivesTinyTerminals(t *testing.T) {
 
 				// And the connection switcher, which is a box of its own.
 				m, _ = press(t, m, "shift+tab", "shift+tab", "p")
+				assert.NotPanics(t, func() { _ = m.View() })
+				assertFitsTerminal(t, m.View(), size.w, size.h)
+
+				// The request browser, likewise — and its save prompt, whose
+				// text input is the one thing here that wants a width of its own
+				// and will happily ask for more than the screen has.
+				m, _ = press(t, m, "esc", "ctrl+r")
+				assert.NotPanics(t, func() { _ = m.View() })
+				assertFitsTerminal(t, m.View(), size.w, size.h)
+
+				m, _ = press(t, m, "esc", "S")
 				assert.NotPanics(t, func() { _ = m.View() })
 				assertFitsTerminal(t, m.View(), size.w, size.h)
 			})

@@ -100,6 +100,39 @@ func (t Tree) Selection() (grpcclient.Service, grpcclient.Method, bool) {
 	return svc, svc.Methods[r.method], true
 }
 
+// SelectMethod puts the cursor on a method by fully-qualified name, expanding
+// the service that holds it. It reports whether the method is there at all.
+//
+// Reloading a request out of history goes through here rather than through the
+// form alone: the tree is where the user reads which method they are looking
+// at, and leaving it pointing at the previous one would make the whole screen
+// disagree with itself.
+func (t *Tree) SelectMethod(fullName string) (grpcclient.Service, grpcclient.Method, bool) {
+	for si, svc := range t.services {
+		for mi, m := range svc.Methods {
+			if m.FullName != fullName {
+				continue
+			}
+
+			t.expanded[svc.Name] = true
+			t.rebuild()
+			t.moveTo(t.rowIndex(si, mi))
+			return svc, m, true
+		}
+	}
+	return grpcclient.Service{}, grpcclient.Method{}, false
+}
+
+// rowIndex finds the visible row for one method of one service.
+func (t Tree) rowIndex(service, method int) int {
+	for i, r := range t.rows {
+		if r.service == service && r.method == method {
+			return i
+		}
+	}
+	return t.cursor
+}
+
 // CursorService returns the service the cursor sits on or under.
 func (t Tree) CursorService() (grpcclient.Service, bool) {
 	r, ok := t.currentRow()
