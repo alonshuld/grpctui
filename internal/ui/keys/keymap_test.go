@@ -60,6 +60,7 @@ func TestEveryBindingIsDocumented(t *testing.T) {
 		"NextPanel": km.NextPanel, "PrevPanel": km.PrevPanel, "Profiles": km.Profiles,
 		"HistoryPrev": km.HistoryPrev, "HistoryNext": km.HistoryNext,
 		"Requests": km.Requests, "Save": km.Save, "Filter": km.Filter,
+		"Environments": km.Environments, "Variables": km.Variables, "Capture": km.Capture,
 		"Retry": km.Retry, "Help": km.Help, "Quit": km.Quit, "ForceQuit": km.ForceQuit,
 	} {
 		t.Run(name, func(t *testing.T) {

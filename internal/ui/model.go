@@ -31,6 +31,7 @@ import (
 	"github.com/alonshuld/grpctui/internal/ui/keys"
 	"github.com/alonshuld/grpctui/internal/ui/panels"
 	"github.com/alonshuld/grpctui/internal/ui/styles"
+	"github.com/alonshuld/grpctui/internal/vars"
 )
 
 // DefaultDiscoveryTimeout bounds a single reflection sweep.
@@ -181,6 +182,17 @@ func WithProfiles(profiles []grpcclient.Profile, active int) Option {
 	}
 }
 
+// WithEnvironments supplies the named variable sets and says which one to start
+// in. A negative index — which is what a config file with no `environments` key
+// yields — starts with nothing bound, and every {{variable}} reference is then
+// text like any other.
+func WithEnvironments(envs []vars.Environment, active int) Option {
+	return func(m *Model) {
+		m.environments.SetEnvironments(envs, active)
+		m.installEnvironment()
+	}
+}
+
 // WithHistory supplies the requests already sent. Without one the model keeps
 // a session-only history: [ and ] still walk it, it is simply not written down.
 func WithHistory(h requests.History) Option {
@@ -215,11 +227,18 @@ type Model struct {
 	metadata panels.Metadata
 	response panels.Response
 
-	// profiles is the connection switcher, and browser the saved-request list.
-	// Both are modal rather than panels in the tab cycle: while one is open it
-	// owns the keyboard and covers the body.
-	profiles panels.Profiles
-	browser  panels.Requests
+	// profiles is the connection switcher, browser the saved-request list,
+	// environments the variable-set switcher and variables the list of what the
+	// active one binds. All four are modal rather than panels in the tab cycle:
+	// while one is open it owns the keyboard and covers the body.
+	//
+	// variables owns the bindings themselves — see [Model.bindings] — so that
+	// there is one copy of them rather than one the panel draws and another the
+	// requests resolve against.
+	profiles     panels.Profiles
+	browser      panels.Requests
+	environments panels.Environments
+	variables    panels.Variables
 
 	// history is every request sent, newest first. It lives on the model rather
 	// than behind the browser because [ and ] walk it with the browser closed.
@@ -325,6 +344,8 @@ func New(client Client, opts ...Option) Model {
 		response:         panels.NewResponse(km, st),
 		profiles:         panels.NewProfiles(km, st),
 		browser:          panels.NewRequests(km, st),
+		environments:     panels.NewEnvironments(km, st),
+		variables:        panels.NewVariables(km, st),
 		historyAt:        noHistory,
 		lastCollection:   requests.DefaultCollection,
 		state:            stateConnecting,
@@ -341,8 +362,38 @@ func New(client Client, opts ...Option) Model {
 	m.browser.SetClock(m.now)
 	m.browser.SetHistory(m.history)
 
+	// The form resolves against whatever is bound, including nothing: a model
+	// built with no environments still has to expand a reference to a variable
+	// the user binds later with v.
+	m.request.SetResolver(m.bindings())
+
 	m.syncFocus()
 	return m
+}
+
+// bindings are the variables in force, which the variables panel owns.
+func (m Model) bindings() vars.Set { return m.variables.Set() }
+
+// installEnvironment points the variables panel and the request form at the
+// active environment's bindings.
+//
+// Switching environment replaces the bindings rather than merging them: a value
+// captured while pointed at staging is staging's, and carrying it into
+// production would be the single most expensive thing this feature could do.
+func (m *Model) installEnvironment() {
+	env, _ := m.environments.Active()
+	m.variables.SetVariables(env.Set(), env.Name)
+	m.request.SetResolver(m.bindings())
+}
+
+// bind adds or replaces one variable for the rest of the session. Nothing is
+// written to disk: a binding captured out of a response is very often a token,
+// and grpctui's standing rule is that such a value never reaches a surface that
+// outlives the call.
+func (m *Model) bind(v vars.Variable) {
+	env, _ := m.environments.Active()
+	m.variables.SetVariables(m.bindings().With(v), env.Name)
+	m.request.SetResolver(m.bindings())
 }
 
 // noHistory is [Model.historyAt] when the form does not hold a recalled
@@ -361,7 +412,15 @@ func (m Model) Init() tea.Cmd {
 // same one.
 func (m Model) discover() tea.Cmd {
 	client, parent, timeout := m.client, m.ctx, m.discoveryTimeout
-	md := m.metadata.Headers()
+
+	// A reference nothing binds is left as written here rather than refusing the
+	// sweep. Discovery is not something the user asked for at this moment, and a
+	// connection that will not even list its services because a variable is
+	// missing is a worse answer than a server that says Unauthenticated.
+	md, err := m.headers()
+	if err != nil {
+		m.logger.Debug("discovering with unresolved headers", zap.Error(err))
+	}
 
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(parent, timeout)
@@ -490,6 +549,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case panels.ProfileSelectedMsg:
 		return m, m.startConnect(msg)
 
+	case panels.EnvironmentSelectedMsg:
+		return m, m.switchEnvironment(msg)
+
+	case panels.VariableBoundMsg:
+		m.bind(vars.Variable{Name: msg.Name, Value: msg.Value})
+		m.variables.Open()
+		m.layout()
+		m.logger.Debug("bound a variable", zap.String("name", msg.Name))
+		return m, nil
+
+	case panels.VariableUnboundMsg:
+		env, _ := m.environments.Active()
+		m.variables.SetVariables(m.bindings().Without(msg.Name), env.Name)
+		m.request.SetResolver(m.bindings())
+		m.layout()
+		return m, nil
+
+	case panels.VariableCapturedMsg:
+		return m.capture(msg)
+
 	case clientConnectedMsg:
 		return m.finishConnect(msg)
 
@@ -508,18 +587,30 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 		return tea.Quit, true
 	}
 
-	// The two modals own every remaining key while they are open, including the
+	// The modals own every remaining key while they are open, including the
 	// panel switches — each is a choice to finish, not a place to tab out of.
-	// The browser comes second because ctrl+s means "load and send this one"
-	// inside it, which must not reach the send below.
+	// The browser and the variables panel come before the send below, because
+	// inside them ctrl+s means "load and send this one" and ctrl+p means
+	// "capture into this prompt".
 	if m.profiles.Opened() {
 		var cmd tea.Cmd
 		m.profiles, cmd = m.profiles.Update(msg)
 		return cmd, true
 	}
+	if m.environments.Opened() {
+		var cmd tea.Cmd
+		m.environments, cmd = m.environments.Update(msg)
+		return cmd, true
+	}
 	if m.browser.Opened() {
 		var cmd tea.Cmd
 		m.browser, cmd = m.browser.Update(msg)
+		m.layout()
+		return cmd, true
+	}
+	if m.variables.Opened() {
+		var cmd tea.Cmd
+		m.variables, cmd = m.variables.Update(msg)
 		m.layout()
 		return cmd, true
 	}
@@ -544,6 +635,13 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 		m.openBrowser()
 		return nil, true
 
+	case key.Matches(msg, m.keys.Capture):
+		// ctrl+p for the same reason: reading an id out of the response and
+		// putting it in the field you are already typing into is the ordinary
+		// way a chain of requests gets built.
+		m.startCapture()
+		return nil, true
+
 	case key.Matches(msg, m.keys.NextPanel):
 		return nil, m.movePanel(1)
 
@@ -563,6 +661,15 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 
 	case key.Matches(msg, m.keys.Profiles):
 		m.profiles.Open()
+		return nil, true
+
+	case key.Matches(msg, m.keys.Environments):
+		m.environments.Open()
+		return nil, true
+
+	case key.Matches(msg, m.keys.Variables):
+		m.variables.Open()
+		m.layout()
 		return nil, true
 
 	case key.Matches(msg, m.keys.HistoryPrev):
@@ -635,43 +742,69 @@ func (m *Model) send() tea.Cmd {
 // the wire — including the one a [panels.LoadRequestMsg] arrives by, where
 // there is no form submission to hang it off.
 func (m *Model) dispatch(req panels.SendRequestMsg) tea.Cmd {
-	record := m.record(req)
+	// The headers are resolved here rather than in each of the three senders,
+	// for the same reason the history entry is written here: there is one door,
+	// and a reference nobody bound must refuse the call whichever way in it came.
+	m.metadata.SetNotice("")
+
+	md, err := m.headers()
+	if err != nil {
+		m.metadata.SetNotice(err.Error())
+		m.focus = focusMetadata
+		m.syncFocus()
+		m.layout()
+		m.logger.Debug("refused to send with unresolved headers", zap.Error(err))
+		return nil
+	}
+
+	record := m.record(req, md)
 
 	if req.Method.Kind() == grpcclient.KindUnary {
-		return tea.Batch(record, m.startCall(req))
+		return tea.Batch(record, m.startCall(req, md))
 	}
-	return tea.Batch(record, m.sendOnStream(req))
+	return tea.Batch(record, m.sendOnStream(req, md))
+}
+
+// headers are the metadata the next call carries, with every {{variable}}
+// reference expanded.
+//
+// A reference nothing binds is refused rather than sent as written: an
+// `authorization: Bearer {{token}}` that goes out literally comes back
+// Unauthenticated, which is the most misleading answer the server could
+// possibly give. Disabled headers are skipped — one parked precisely because it
+// referred to something is not a reason to refuse the call.
+func (m Model) headers() (grpcclient.Metadata, error) {
+	md := m.metadata.Headers()
+	set := m.bindings()
+
+	var errs []error
+	for i, h := range md {
+		if h.Disabled {
+			continue
+		}
+		value, err := set.Resolve(h.Value)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("header %q: %w", h.Key, err))
+			continue
+		}
+		md[i].Value = value
+	}
+	return md, errors.Join(errs...)
 }
 
 // record adds one sent request to history and returns the command that writes
 // history out.
 //
-// The entry carries header *names* and no values. A history file sits in the
-// state directory for weeks and a collection is meant to be committed, so the
+// The entry carries header *names* and no values, and the request as it was
+// *typed* rather than as it was sent. A history file sits in the state
+// directory for weeks and a collection is meant to be committed, so the
 // standing rule that a credential never reaches a surface outliving the call
-// applies to both — see internal/requests.
-func (m *Model) record(req panels.SendRequestMsg) tea.Cmd {
-	body, err := protoschema.EncodeBody(req.Request)
-	if err != nil {
-		// The request itself is fine — it built from the form. Only recording it
-		// failed, and dropping the history entry beats refusing the call.
-		m.logger.Warn("could not record the request in history",
-			zap.String("method", req.Method.FullName),
-			zap.Error(err),
-		)
+// applies to both — and since v0.7 the most likely credential in a request body
+// is a {{token}} captured out of a login response.
+func (m *Model) record(req panels.SendRequestMsg, md grpcclient.Metadata) tea.Cmd {
+	entry, ok := m.entry(req, md)
+	if !ok {
 		return nil
-	}
-
-	entry := requests.Request{
-		Method:  req.Method.FullName,
-		Kind:    string(req.Method.Kind()),
-		Target:  m.client.Target(),
-		Headers: m.metadata.Headers().Keys(),
-		Body:    body,
-		SentAt:  m.now().UTC(),
-	}
-	if profile, ok := m.profiles.Active(); ok {
-		entry.Profile = profile.Label()
 	}
 
 	m.history.Add(entry)
@@ -682,6 +815,46 @@ func (m *Model) record(req panels.SendRequestMsg) tea.Cmd {
 	m.historyAt = 0
 
 	return saveHistory(m.history)
+}
+
+// entry builds the record of one request, for history and for a collection
+// alike — they hold the same thing for different reasons, so there is one place
+// that decides what it holds.
+//
+// The body comes from the request's template, which is the same message with
+// its {{variable}} references left as they were written. A template that could
+// not be built falls back to the request that went out: a call worth making is
+// worth recording imperfectly rather than not at all.
+func (m Model) entry(req panels.SendRequestMsg, md grpcclient.Metadata) (requests.Request, bool) {
+	message, values := req.Template, req.Values
+	if message == nil {
+		message = req.Request
+	}
+
+	body, err := protoschema.EncodeBody(message)
+	if err != nil {
+		// The request itself is fine — it built from the form. Only recording it
+		// failed, and dropping the entry beats refusing the call.
+		m.logger.Warn("could not record the request",
+			zap.String("method", req.Method.FullName),
+			zap.Error(err),
+		)
+		return requests.Request{}, false
+	}
+
+	entry := requests.Request{
+		Method:  req.Method.FullName,
+		Kind:    string(req.Method.Kind()),
+		Target:  m.client.Target(),
+		Headers: md.Keys(),
+		Body:    body,
+		Values:  values,
+		SentAt:  m.now().UTC(),
+	}
+	if profile, ok := m.profiles.Active(); ok {
+		entry.Profile = profile.Label()
+	}
+	return entry, true
 }
 
 // saveHistory writes history out off the Update goroutine.
@@ -695,7 +868,7 @@ func saveHistory(h requests.History) tea.Cmd {
 // That is the same keystroke meaning two things by context, and deliberately:
 // ctrl+s is "send what the form says", and on a client-streaming call that is a
 // thing you do repeatedly before ending the request stream with ctrl+e.
-func (m *Model) sendOnStream(req panels.SendRequestMsg) tea.Cmd {
+func (m *Model) sendOnStream(req panels.SendRequestMsg, md grpcclient.Metadata) tea.Cmd {
 	// A method the client does not stream into carries exactly one request, so
 	// there is no second message to send on its stream: ctrl+s starts a new one,
 	// the same way a second ctrl+s replaces a unary call in flight.
@@ -705,7 +878,7 @@ func (m *Model) sendOnStream(req panels.SendRequestMsg) tea.Cmd {
 	// waiting for the answer to it; throwing that away and starting again is the
 	// one thing they cannot have meant.
 	if m.stream == nil || !req.Method.ClientStreaming {
-		return m.startStream(req)
+		return m.startStream(req, md)
 	}
 
 	m.sendQueue = append(m.sendQueue, req.Request)
@@ -742,6 +915,102 @@ func (m Model) loadRequest(msg panels.LoadRequestMsg) (tea.Model, tea.Cmd) {
 func (m *Model) openBrowser() {
 	m.browser.Open()
 	m.layout()
+}
+
+// startCapture asks which value of the last response to bind, and to what.
+//
+// It refuses when there is nothing to read from rather than opening a prompt
+// over an empty response: a prompt that can only fail is a worse answer than
+// the reason it would have failed for.
+func (m *Model) startCapture() {
+	_, format, ok := m.responseBody()
+	switch {
+	case !ok:
+		m.variables.Open()
+		m.variables.SetNotice("There is no response to capture from yet.", true)
+	case format != protoschema.FormatJSON:
+		m.variables.Open()
+		m.variables.SetNotice("This response is protobuf text, so there is no path to read.", true)
+	default:
+		m.variables.OpenCapture("")
+	}
+	m.layout()
+}
+
+// responseBody is the message a capture would read from.
+func (m Model) responseBody() (string, protoschema.Format, bool) {
+	return m.response.LastMessage()
+}
+
+// capture reads one value out of the last response and binds it.
+//
+// The lookup happens here rather than in the panel because only the root model
+// has the response, and because a path that names nothing is a thing to report
+// on the prompt — with the prompt still up, so it can be corrected — rather
+// than a thing to guess at.
+func (m Model) capture(msg panels.VariableCapturedMsg) (tea.Model, tea.Cmd) {
+	body, _, ok := m.responseBody()
+	if !ok {
+		m.variables.SetNotice("There is no response to capture from yet.", true)
+		m.layout()
+		return m, nil
+	}
+
+	value, err := protoschema.LookupJSON(body, msg.Path)
+	if err != nil {
+		m.variables.SetNotice(err.Error(), true)
+		m.layout()
+		m.logger.Debug("could not capture from the response",
+			zap.String("name", msg.Name), zap.Error(err))
+		return m, nil
+	}
+
+	m.bind(vars.Variable{Name: msg.Name, Value: value, Captured: true})
+	m.variables.Open()
+	m.layout()
+
+	// The name and where it came from, never what it is worth: a captured value
+	// is a bearer token as often as not.
+	m.logger.Info("captured a variable",
+		zap.String("name", msg.Name), zap.String("path", msg.Path))
+	return m, nil
+}
+
+// switchEnvironment installs another environment's bindings, and reconnects
+// when it points somewhere else.
+//
+// Reconnecting is the point of an environment having a target at all: "staging"
+// usually means both a different host and a different account id, and having to
+// switch those separately is how a request meant for staging reaches
+// production. The connection keeps the active profile's security and
+// credentials — how to connect is the profile's business, where to connect is
+// the environment's.
+func (m *Model) switchEnvironment(msg panels.EnvironmentSelectedMsg) tea.Cmd {
+	m.environments.SetActive(msg.Index)
+	m.installEnvironment()
+	m.layout()
+
+	m.logger.Info("switched environment",
+		zap.String("environment", msg.Environment.Name),
+		zap.Strings("variables", m.bindings().Names()),
+	)
+
+	if msg.Environment.Target == "" || msg.Environment.Target == m.client.Target() {
+		return nil
+	}
+
+	profile, ok := m.profiles.Active()
+	if !ok {
+		m.logger.Warn("cannot follow the environment's target: no profile is active",
+			zap.String("target", msg.Environment.Target))
+		return nil
+	}
+
+	profile.Target = msg.Environment.Target
+	return m.startConnect(panels.ProfileSelectedMsg{
+		Index:   m.profiles.ActiveIndex(),
+		Profile: profile,
+	})
 }
 
 // startSave asks where to put the request in the form.
@@ -828,8 +1097,21 @@ func (m *Model) load(entry requests.Request) bool {
 	m.retireCall()
 	m.request.SetMethod(svc, method)
 	m.request.Load(msg)
+
+	// The references the body could not carry go back on the rows they were
+	// typed into, which is what makes a recalled request a template again rather
+	// than the zeroes its body had to hold. A path the method no longer has is
+	// worth saying out loud: the alternative is a request quietly missing the
+	// field you thought you had set.
+	notice := m.missingHeaders(entry)
+	if err := m.request.LoadValues(entry.Values); err != nil {
+		notice = err.Error()
+		m.logger.Warn("could not restore a saved request's variables",
+			zap.String("method", entry.Method), zap.Error(err))
+	}
+
 	m.response.SetMethod(method)
-	m.request.SetNotice(m.missingHeaders(entry))
+	m.request.SetNotice(notice)
 	m.layout()
 
 	m.logger.Debug("recalled a request", zap.String("method", entry.Method))
@@ -872,25 +1154,17 @@ func (m *Model) saveRequest(msg panels.SaveRequestMsg) tea.Cmd {
 		return nil
 	}
 
-	body, err := protoschema.EncodeBody(req.Request)
-	if err != nil {
-		m.browser.SetNotice(err.Error(), true)
+	// The headers are recorded by name, so an unresolved reference in one is no
+	// reason to refuse a save: what goes in the file is the same either way.
+	md, _ := m.headers()
+
+	entry, ok := m.entry(req, md)
+	if !ok {
+		m.browser.SetNotice("The request could not be written down.", true)
 		m.layout()
 		return nil
 	}
-
-	entry := requests.Request{
-		Name:    msg.Name,
-		Method:  req.Method.FullName,
-		Kind:    string(req.Method.Kind()),
-		Target:  m.client.Target(),
-		Headers: m.metadata.Headers().Keys(),
-		Body:    body,
-		SentAt:  m.now().UTC(),
-	}
-	if profile, ok := m.profiles.Active(); ok {
-		entry.Profile = profile.Label()
-	}
+	entry.Name = msg.Name
 
 	m.logger.Info("saving a request",
 		zap.String("collection", msg.Collection),
@@ -943,7 +1217,7 @@ func shortName(fullName string) string {
 // startStream opens a streaming call, tagged with a sequence number from the
 // same counter unary calls use — only one call, of either shape, is ever in
 // flight.
-func (m *Model) startStream(req panels.SendRequestMsg) tea.Cmd {
+func (m *Model) startStream(req panels.SendRequestMsg, md grpcclient.Metadata) tea.Cmd {
 	m.abortCall()
 	m.dropStream()
 	m.callSeq++
@@ -962,7 +1236,6 @@ func (m *Model) startStream(req panels.SendRequestMsg) tea.Cmd {
 	m.closeAfterQueue = !req.Method.ClientStreaming
 
 	// Header names, never their values.
-	md := m.metadata.Headers()
 	m.logger.Info("opening stream",
 		zap.String("target", m.client.Target()),
 		zap.String("method", req.Method.FullName),
@@ -1185,7 +1458,7 @@ func (m Model) elapsed() time.Duration { return m.now().Sub(m.streamStart) }
 
 // startCall issues one unary call, tagged with a sequence number so that a
 // result the user has moved on from can be discarded.
-func (m *Model) startCall(req panels.SendRequestMsg) tea.Cmd {
+func (m *Model) startCall(req panels.SendRequestMsg, md grpcclient.Metadata) tea.Cmd {
 	m.abortCall()
 	m.dropStream()
 	m.callSeq++
@@ -1195,7 +1468,6 @@ func (m *Model) startCall(req panels.SendRequestMsg) tea.Cmd {
 
 	// Header names, never their values: this log outlives the session and the
 	// values are where the bearer token is.
-	md := m.metadata.Headers()
 	m.logger.Info("calling method",
 		zap.String("target", m.client.Target()),
 		zap.String("method", req.Method.FullName),
@@ -1476,6 +1748,10 @@ func (m Model) View() string {
 		// composes boxes, it does not overlay them, and a half-drawn panel
 		// behind a chooser reads as a rendering bug rather than as depth.
 		screen = m.centred(m.profiles.View())
+	case m.environments.Opened():
+		screen = m.centred(m.environments.View())
+	case m.variables.Opened():
+		screen = m.centred(m.variables.View())
 	case m.browser.Opened():
 		screen = m.centred(m.browser.View())
 	case m.state == stateConnecting:
@@ -1595,6 +1871,18 @@ func (m Model) statusBar() string {
 		}
 	}
 
+	// Which environment a request means, and how much is bound — never what any
+	// of it is bound to. A terminal is shared over a screen share more often
+	// than a config file is, and since v0.7 a variable can hold a token captured
+	// out of a login response.
+	if env, ok := m.environments.Active(); ok {
+		segment := m.styles.Label.Render(env.Name)
+		if n := m.bindings().Len(); n > 0 {
+			segment += " " + fmt.Sprintf("%d %s", n, plural(n, "var"))
+		}
+		segments = append(segments, segment)
+	}
+
 	if n := m.metadata.Enabled(); n > 0 {
 		segments = append(segments, fmt.Sprintf("%d %s", n, plural(n, "header")))
 	}
@@ -1694,6 +1982,8 @@ func (m *Model) layout() {
 
 	m.profiles.SetSize(m.width, m.height)
 	m.browser.SetSize(m.width, m.height)
+	m.environments.SetSize(m.width, m.height)
+	m.variables.SetSize(m.width, m.height)
 }
 
 func (m Model) computeLayout() layoutSizes {

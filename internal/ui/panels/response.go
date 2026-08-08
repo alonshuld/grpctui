@@ -2,6 +2,7 @@ package panels
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -287,6 +288,27 @@ func (r *Response) append(entry streamEntry) {
 	if follow {
 		r.viewport.GotoBottom()
 	}
+}
+
+// LastMessage returns the most recent message the panel is showing and how it
+// was rendered: the response of a unary call, or the last message received on a
+// stream. It reports false when there is nothing to read a value out of.
+//
+// It is what a capture reads from. Going back to the rendered text rather than
+// to the message it came from means nothing has to be kept alive between a call
+// finishing and the user deciding, several keystrokes later, that they want the
+// id out of it.
+func (r Response) LastMessage() (string, protoschema.Format, bool) {
+	for _, e := range slices.Backward(r.entries) {
+		if e.kind == streamReceived {
+			return e.body, e.format, true
+		}
+	}
+
+	if r.state != responseOK || r.body == "" {
+		return "", r.format, false
+	}
+	return r.body, r.format, true
 }
 
 // InFlight reports whether a unary call is running.

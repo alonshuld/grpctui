@@ -25,7 +25,21 @@ import (
 type SendRequestMsg struct {
 	Service grpcclient.Service
 	Method  grpcclient.Method
+
+	// Request is what goes on the wire: every {{variable}} reference expanded.
 	Request proto.Message
+
+	// Template is the same request with its references left as they were
+	// written, and Values the ones a protobuf message cannot hold — see
+	// [protoschema.Form.Template]. Together they are what a history entry or a
+	// collection records, so that a saved request stays portable between
+	// environments and a captured token never reaches a file.
+	//
+	// Template is nil when it could not be built, which leaves the recorder to
+	// fall back to Request; a request that went out is worth recording
+	// imperfectly rather than not at all.
+	Template proto.Message
+	Values   map[string]string
 }
 
 // Layout constants for a field row.
@@ -80,6 +94,12 @@ type Form struct {
 	method  grpcclient.Method
 	schema  protoschema.Form
 
+	// resolver expands the {{variable}} references in the form's values. It is
+	// held here as well as on the schema because [Form.SetMethod] builds a fresh
+	// tree, and a form that quietly stopped resolving on the second method
+	// selected would be worse than one that never did.
+	resolver protoschema.Resolver
+
 	// rows is the flattened, visible tree: what the panel draws and what the
 	// cursor indexes. It is rebuilt whenever the tree's shape changes.
 	rows []*protoschema.Node
@@ -125,6 +145,7 @@ func (f *Form) SetMethod(svc grpcclient.Service, m grpcclient.Method) {
 	f.service = svc
 	f.method = m
 	f.schema = protoschema.NewForm(m.InputDescriptor())
+	f.schema.SetResolver(f.resolver)
 	f.selected = true
 	f.editing = false
 	f.cursor = 0
@@ -156,6 +177,33 @@ func (f *Form) Load(msg proto.Message) {
 	f.moveTo(0)
 }
 
+// LoadValues puts a saved request's {{variable}} references back on the rows
+// they were typed into, after [Form.Load] has rebuilt the shape around them.
+func (f *Form) LoadValues(values map[string]string) error {
+	if !f.selected || len(values) == 0 {
+		return nil
+	}
+
+	err := f.schema.LoadValues(values)
+	f.rows = f.schema.Rows()
+	f.moveTo(f.cursor)
+	return err
+}
+
+// SetResolver installs the expansion applied to every value on its way to the
+// wire. Switching environment replaces it, which is what makes the same form
+// mean a different request.
+func (f *Form) SetResolver(r protoschema.Resolver) {
+	f.resolver = r
+	f.schema.SetResolver(r)
+
+	// A row the previous environment could not resolve may resolve now, and the
+	// other way round, so last send's per-row complaints are no longer about
+	// anything. The next send says what is wrong under the new bindings.
+	f.fieldErrs = nil
+	f.refresh()
+}
+
 // SetNotice puts a line at the foot of the panel. It is the same line a failed
 // build writes to, and it is cleared by the next send.
 func (f *Form) SetNotice(text string) {
@@ -179,12 +227,16 @@ func newFieldInput(st styles.Styles) textinput.Model {
 // Clear returns the panel to its empty state.
 func (f *Form) Clear() {
 	*f = Form{
-		keys:    f.keys,
-		styles:  f.styles,
-		input:   newFieldInput(f.styles),
-		width:   f.width,
-		height:  f.height,
-		focused: f.focused,
+		keys:   f.keys,
+		styles: f.styles,
+		input:  newFieldInput(f.styles),
+		// The resolver belongs to the session rather than to the method, so
+		// clearing the panel — which switching connection does — must not be a
+		// way to stop {{variable}} references working.
+		resolver: f.resolver,
+		width:    f.width,
+		height:   f.height,
+		focused:  f.focused,
 	}
 	f.refresh()
 }
@@ -325,7 +377,22 @@ func (f *Form) Submit() (SendRequestMsg, bool) {
 		f.setBuildError(err)
 		return SendRequestMsg{}, false
 	}
-	return SendRequestMsg{Service: f.service, Method: f.method, Request: req}, true
+
+	// The template is built from the same tree that just built cleanly, so it
+	// can only fail on something the wire form did not care about. That is worth
+	// a request recorded without its references rather than a request refused.
+	template, values, err := f.schema.Template()
+	if err != nil {
+		template, values = nil, nil
+	}
+
+	return SendRequestMsg{
+		Service:  f.service,
+		Method:   f.method,
+		Request:  req,
+		Template: template,
+		Values:   values,
+	}, true
 }
 
 // setBuildError splits a build failure into the per-row complaints the rows
@@ -709,6 +776,13 @@ func (f Form) valueCell(i int) string {
 
 // settledValue renders the value column of a row that is not being edited.
 func (f Form) settledValue(i int, node *protoschema.Node) string {
+	// A reference is shown as itself, whatever kind of row holds it: what the
+	// row says is not what the server will see, and a form where a template and
+	// a literal look identical is one you cannot read at a glance.
+	if node.Refers() {
+		return f.styles.FieldRef.Render(node.Value())
+	}
+
 	switch node.Kind() {
 	case protoschema.KindBool:
 		// A bool with presence has three states, not two: an untouched one is not

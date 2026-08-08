@@ -76,6 +76,20 @@ type KeyMap struct {
 	// keys are one shift apart in the fingers and a world apart in effect.
 	Save key.Binding
 
+	// Environments opens the environment switcher and Variables the list of
+	// what the active one binds. They sit beside Profiles because they are the
+	// same sort of thing — a modal choice about the session rather than about
+	// the request — and for the same reason neither is in the tab cycle.
+	Environments key.Binding
+	Variables    key.Binding
+
+	// Capture takes a value out of the last response and binds it to a variable,
+	// which is how one call's answer becomes the next call's argument. It is
+	// ctrl+p rather than a letter because reaching for it while a field is being
+	// typed into is the ordinary case: you read the id in the response, and the
+	// cursor is already in the field that wants it.
+	Capture key.Binding
+
 	// Filter starts typing a query in the request browser. `/` is what every
 	// pager, editor and TUI in the neighbourhood uses.
 	Filter key.Binding
@@ -92,128 +106,160 @@ type KeyMap struct {
 }
 
 // Default returns the built-in keybindings.
+//
+// They are declared in three groups — moving about, editing and sending a
+// request, and the session-wide modals — purely so that the table stays
+// readable. There is still exactly one definition of every binding.
 func Default() KeyMap {
-	return KeyMap{
-		Up: key.NewBinding(
-			key.WithKeys("up", "k"),
-			key.WithHelp("↑/k", "up"),
-		),
-		Down: key.NewBinding(
-			key.WithKeys("down", "j"),
-			key.WithHelp("↓/j", "down"),
-		),
-		PageUp: key.NewBinding(
-			key.WithKeys("pgup", "ctrl+u"),
-			key.WithHelp("ctrl+u", "page up"),
-		),
-		PageDown: key.NewBinding(
-			key.WithKeys("pgdown", "ctrl+d"),
-			key.WithHelp("ctrl+d", "page down"),
-		),
-		Top: key.NewBinding(
-			key.WithKeys("home", "g"),
-			key.WithHelp("g", "top"),
-		),
-		Bottom: key.NewBinding(
-			key.WithKeys("end", "G"),
-			key.WithHelp("G", "bottom"),
-		),
-		ScrollLeft: key.NewBinding(
-			key.WithKeys("shift+left", "H"),
-			key.WithHelp("H", "scroll left"),
-		),
-		ScrollRight: key.NewBinding(
-			key.WithKeys("shift+right", "L"),
-			key.WithHelp("L", "scroll right"),
-		),
-		Select: key.NewBinding(
-			key.WithKeys("enter"),
-			key.WithHelp("enter", "select/edit"),
-		),
-		Expand: key.NewBinding(
-			key.WithKeys("right", "l"),
-			key.WithHelp("→/l", "expand"),
-		),
-		Collapse: key.NewBinding(
-			key.WithKeys("left", "h"),
-			key.WithHelp("←/h", "collapse"),
-		),
-		Toggle: key.NewBinding(
-			key.WithKeys(" "),
-			key.WithHelp("space", "toggle"),
-		),
-		Add: key.NewBinding(
-			key.WithKeys("a", "+"),
-			key.WithHelp("a", "add item"),
-		),
-		Remove: key.NewBinding(
-			key.WithKeys("d", "-"),
-			key.WithHelp("d", "remove item"),
-		),
-		Send: key.NewBinding(
-			key.WithKeys("ctrl+s"),
-			key.WithHelp("ctrl+s", "send"),
-		),
-		Cancel: key.NewBinding(
-			key.WithKeys("esc"),
-			key.WithHelp("esc", "cancel"),
-		),
-		EndStream: key.NewBinding(
-			// ctrl+e rather than a plain letter: closing the request stream has
-			// to work from inside the form, where a letter is a character being
-			// typed into a field.
-			key.WithKeys("ctrl+e"),
-			key.WithHelp("ctrl+e", "end sending"),
-		),
-		NextPanel: key.NewBinding(
-			key.WithKeys("tab"),
-			key.WithHelp("tab", "next panel"),
-		),
-		PrevPanel: key.NewBinding(
-			key.WithKeys("shift+tab"),
-			key.WithHelp("shift+tab", "prev panel"),
-		),
-		Profiles: key.NewBinding(
-			key.WithKeys("p"),
-			key.WithHelp("p", "connections"),
-		),
-		HistoryPrev: key.NewBinding(
-			key.WithKeys("["),
-			key.WithHelp("[", "older request"),
-		),
-		HistoryNext: key.NewBinding(
-			key.WithKeys("]"),
-			key.WithHelp("]", "newer request"),
-		),
-		Requests: key.NewBinding(
-			key.WithKeys("ctrl+r"),
-			key.WithHelp("ctrl+r", "requests"),
-		),
-		Save: key.NewBinding(
-			key.WithKeys("S"),
-			key.WithHelp("S", "save"),
-		),
-		Filter: key.NewBinding(
-			key.WithKeys("/"),
-			key.WithHelp("/", "filter"),
-		),
-		Retry: key.NewBinding(
-			key.WithKeys("r"),
-			key.WithHelp("r", "retry"),
-		),
-		Help: key.NewBinding(
-			key.WithKeys("?"),
-			key.WithHelp("?", "help"),
-		),
-		Quit: key.NewBinding(
-			key.WithKeys("q"),
-			key.WithHelp("q", "quit"),
-		),
-		ForceQuit: key.NewBinding(
-			key.WithKeys("ctrl+c"),
-			key.WithHelp("ctrl+c", "quit"),
-		),
-	}
+	var km KeyMap
+	km.navigation()
+	km.request()
+	km.session()
+	return km
+}
+
+// navigation binds the keys that move a cursor or a view.
+func (k *KeyMap) navigation() {
+	k.Up = key.NewBinding(
+		key.WithKeys("up", "k"),
+		key.WithHelp("↑/k", "up"),
+	)
+	k.Down = key.NewBinding(
+		key.WithKeys("down", "j"),
+		key.WithHelp("↓/j", "down"),
+	)
+	k.PageUp = key.NewBinding(
+		key.WithKeys("pgup", "ctrl+u"),
+		key.WithHelp("ctrl+u", "page up"),
+	)
+	k.PageDown = key.NewBinding(
+		key.WithKeys("pgdown", "ctrl+d"),
+		key.WithHelp("ctrl+d", "page down"),
+	)
+	k.Top = key.NewBinding(
+		key.WithKeys("home", "g"),
+		key.WithHelp("g", "top"),
+	)
+	k.Bottom = key.NewBinding(
+		key.WithKeys("end", "G"),
+		key.WithHelp("G", "bottom"),
+	)
+	k.ScrollLeft = key.NewBinding(
+		key.WithKeys("shift+left", "H"),
+		key.WithHelp("H", "scroll left"),
+	)
+	k.ScrollRight = key.NewBinding(
+		key.WithKeys("shift+right", "L"),
+		key.WithHelp("L", "scroll right"),
+	)
+	k.NextPanel = key.NewBinding(
+		key.WithKeys("tab"),
+		key.WithHelp("tab", "next panel"),
+	)
+	k.PrevPanel = key.NewBinding(
+		key.WithKeys("shift+tab"),
+		key.WithHelp("shift+tab", "prev panel"),
+	)
+}
+
+// request binds the keys that fill a request in and put it on the wire.
+func (k *KeyMap) request() {
+	k.Select = key.NewBinding(
+		key.WithKeys("enter"),
+		key.WithHelp("enter", "select/edit"),
+	)
+	k.Expand = key.NewBinding(
+		key.WithKeys("right", "l"),
+		key.WithHelp("→/l", "expand"),
+	)
+	k.Collapse = key.NewBinding(
+		key.WithKeys("left", "h"),
+		key.WithHelp("←/h", "collapse"),
+	)
+	k.Toggle = key.NewBinding(
+		key.WithKeys(" "),
+		key.WithHelp("space", "toggle"),
+	)
+	k.Add = key.NewBinding(
+		key.WithKeys("a", "+"),
+		key.WithHelp("a", "add item"),
+	)
+	k.Remove = key.NewBinding(
+		key.WithKeys("d", "-"),
+		key.WithHelp("d", "remove item"),
+	)
+	k.Send = key.NewBinding(
+		key.WithKeys("ctrl+s"),
+		key.WithHelp("ctrl+s", "send"),
+	)
+	k.Cancel = key.NewBinding(
+		key.WithKeys("esc"),
+		key.WithHelp("esc", "cancel"),
+	)
+	k.EndStream = key.NewBinding(
+		// ctrl+e rather than a plain letter: closing the request stream has to
+		// work from inside the form, where a letter is a character being typed
+		// into a field.
+		key.WithKeys("ctrl+e"),
+		key.WithHelp("ctrl+e", "end sending"),
+	)
+	k.HistoryPrev = key.NewBinding(
+		key.WithKeys("["),
+		key.WithHelp("[", "older request"),
+	)
+	k.HistoryNext = key.NewBinding(
+		key.WithKeys("]"),
+		key.WithHelp("]", "newer request"),
+	)
+}
+
+// session binds the keys that open a modal or end the program: the things that
+// are about the session rather than about the request in front of you.
+func (k *KeyMap) session() {
+	k.Profiles = key.NewBinding(
+		key.WithKeys("p"),
+		key.WithHelp("p", "connections"),
+	)
+	k.Environments = key.NewBinding(
+		key.WithKeys("e"),
+		key.WithHelp("e", "environments"),
+	)
+	k.Variables = key.NewBinding(
+		key.WithKeys("v"),
+		key.WithHelp("v", "variables"),
+	)
+	k.Capture = key.NewBinding(
+		key.WithKeys("ctrl+p"),
+		key.WithHelp("ctrl+p", "capture"),
+	)
+	k.Requests = key.NewBinding(
+		key.WithKeys("ctrl+r"),
+		key.WithHelp("ctrl+r", "requests"),
+	)
+	k.Save = key.NewBinding(
+		key.WithKeys("S"),
+		key.WithHelp("S", "save"),
+	)
+	k.Filter = key.NewBinding(
+		key.WithKeys("/"),
+		key.WithHelp("/", "filter"),
+	)
+	k.Retry = key.NewBinding(
+		key.WithKeys("r"),
+		key.WithHelp("r", "retry"),
+	)
+	k.Help = key.NewBinding(
+		key.WithKeys("?"),
+		key.WithHelp("?", "help"),
+	)
+	k.Quit = key.NewBinding(
+		key.WithKeys("q"),
+		key.WithHelp("q", "quit"),
+	)
+	k.ForceQuit = key.NewBinding(
+		key.WithKeys("ctrl+c"),
+		key.WithHelp("ctrl+c", "quit"),
+	)
 }
 
 // ShortHelp implements help.KeyMap: the single-line help bar.
@@ -235,9 +281,12 @@ func (k KeyMap) FullHelp() [][]key.Binding {
 		// it past 100 cells, where the last one is truncated away entirely.
 		// Recalling and keeping a request sit with sending one: they are the same
 		// subject, and a sixth column would push the bar past 100 cells, where
-		// the last of them is truncated away entirely.
-		{k.Add, k.Remove, k.Send, k.EndStream, k.Cancel, k.Requests, k.Save},
-		{k.NextPanel, k.PrevPanel, k.Profiles, k.HistoryPrev, k.HistoryNext},
+		// the last of them is truncated away entirely. Capturing a value out of a
+		// response is the same subject again, and — like everything else here —
+		// costs a row rather than a column, since a column is only ever as wide
+		// as its widest entry.
+		{k.Add, k.Remove, k.Send, k.EndStream, k.Cancel, k.Requests, k.Save, k.Capture},
+		{k.NextPanel, k.PrevPanel, k.Profiles, k.HistoryPrev, k.HistoryNext, k.Environments, k.Variables},
 		{k.Retry, k.Help, k.Quit},
 	}
 }
