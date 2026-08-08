@@ -7,13 +7,15 @@ browser tab.
 Point it at a gRPC server with reflection enabled and it discovers the entire
 API surface with zero configuration.
 
-> **Status: v0.6 — History & Collections.** Discover a server, fill in a request
-> form generated from the method's input message — nested messages, repeated
-> fields, maps, `oneof` variants and enums included — send the headers a real
-> service wants alongside it, over TLS or mTLS, switch between saved connections
-> without restarting, and drive all three streaming shapes. Every call you make
-> is remembered, and the ones worth keeping go into named collections you can
-> commit. Variables and environments land in v0.7.
+> **Status: v0.7 — Variables & Environments.** Discover a server, fill in a
+> request form generated from the method's input message — nested messages,
+> repeated fields, maps, `oneof` variants and enums included — send the headers a
+> real service wants alongside it, over TLS or mTLS, switch between saved
+> connections without restarting, and drive all three streaming shapes. Every
+> call you make is remembered, and the ones worth keeping go into named
+> collections you can commit. Write `{{variable}}` anywhere in a request, switch
+> environments to change what it means, and capture a value out of one response
+> to use in the next. Raw-wire and diffing views land in v0.8.
 
 ## Install
 
@@ -41,6 +43,8 @@ as such, rather than reported as a failed call.
 ```
 Flags:
   -profile string     connection profile to start on
+  -env string         environment to start in
+  -V name=value       variable, referred to as {{name}} in a request; repeatable
   -tls                connect over TLS
   -cacert string      verify the server against this PEM bundle
   -cert string        PEM client certificate to present (mutual TLS)
@@ -270,13 +274,83 @@ from the TUI.
 in your state directory for weeks and a collection is meant to be committed, so
 neither is somewhere a bearer token may end up. Recalling a request therefore
 restores its shape and leaves the credentials to the connection; if it went out
-with a header the current connection is not sending, the form says which.
+with a header the current connection is not sending, the form says which. The
+same rule is why a field filled in from a variable is written down as
+`{{who}}` rather than as what it expanded to — see
+[Variables and environments](#variables-and-environments).
 
 A collection outlives the schema it was written against. A body naming a field
 that has since been renamed is reported rather than skipped — a request quietly
 sent without the field you thought you had set is the failure this whole feature
 exists to prevent. So is a history or collection file that will not parse: it
 stops startup instead of being silently replaced by the next send.
+
+## Variables and environments
+
+A collection is only portable if it is not hardcoded. Write `{{name}}` anywhere
+in a request — a field of any type, a header value — and it is expanded on the
+way to the wire and nowhere else:
+
+```
+name       string   hello {{who}}
+times      int32    {{count}}
+```
+
+`e` opens the environment switcher. An environment is a named set of variables
+and, optionally, the address they belong to: switching to `staging` changes both
+what `{{tenant}}` means and which server hears about it, because having to
+switch those separately is how a request meant for staging reaches production.
+
+```yaml
+environment: dev        # which one to start in; the first, if omitted
+
+environments:
+  - name: dev
+    target: localhost:50051
+    variables:
+      tenant: local
+      user_id: "1"
+
+  - name: staging
+    target: api.staging.example.com:443
+    variables:
+      tenant: acme
+      user_id: "42"
+```
+
+Environments are a different axis from profiles. A profile says **how** to
+connect — TLS, credentials, the headers that go with them — and an environment
+says **what a request means**. Switching environment keeps the active profile
+and only changes where it points, so one set of credentials serves every
+environment that shares them.
+
+`v` lists what is bound right now: `a` adds a binding, `enter` edits one, `d`
+drops it. Nothing here is written to disk. `-V name=value` binds one from the
+command line, for every environment, for the session.
+
+**Chaining requests.** `ctrl+p` captures a value out of the last response into a
+variable — the id a create call returned, the token a login call issued — using
+the same path the request form shows:
+
+```
+name=path       user.id
+                items[0].sku
+                accessToken
+```
+
+The next request refers to it as `{{user_id}}`. It works from inside a
+half-typed field, which is exactly when you want it.
+
+A reference nothing binds refuses the send and says which name is missing, on
+the row that used it. An `authorization: Bearer {{token}}` sent literally comes
+back `Unauthenticated`, which is the most misleading answer a server can give.
+
+**References survive being saved; their values never are.** A history entry and
+a collection record `{{who}}`, not what it expanded to — so the same saved
+request calls dev and prod, and a captured token stays out of every file. There
+are two syntaxes here and they are deliberately distinct: `${VAR}` is the
+process environment, read once when the config file loads, and `{{name}}` is a
+grpctui variable, resolved when a request is sent.
 
 ## Keybindings
 
@@ -295,6 +369,9 @@ stops startup instead of being silently replaced by the next send.
 | `esc` | Stop editing a field, cancel a call in flight, or close a modal |
 | `tab`, `shift+tab` | Switch panel |
 | `p` | Open the connection switcher |
+| `e` | Open the environment switcher |
+| `v` | Open the variables list |
+| `ctrl+p` | Capture a value from the last response into a variable |
 | `[`, `]` | Step back / forward through the requests already sent |
 | `ctrl+r` | Open the saved-request browser |
 | `S` | Save the current request into a collection |
@@ -305,8 +382,8 @@ stops startup instead of being silently replaced by the next send.
 | `ctrl+c` | Quit, even mid-edit |
 
 While a field is being edited every key is a character — `q` types a `q`. Only
-`ctrl+c`, `ctrl+s`, `ctrl+e`, `ctrl+r` and the panel switches keep their
-meaning.
+`ctrl+c`, `ctrl+s`, `ctrl+e`, `ctrl+r`, `ctrl+p` and the panel switches keep
+their meaning.
 
 ## Development
 
@@ -325,8 +402,9 @@ The codebase is four strictly one-directional layers — transport → domain �
 | --- | --- |
 | `internal/grpcclient` | Dial, TLS/mTLS, credentials, reflection discovery, dynamic invoke |
 | `internal/protoschema` | Descriptor → form-field tree; values → wire message |
-| `internal/config` | `~/.config/grpctui/config.yaml`, connection profiles |
+| `internal/config` | `~/.config/grpctui/config.yaml`, connection profiles, environments |
 | `internal/requests` | Sent-request history and saved collections on disk |
+| `internal/vars` | Variables, environments, `{{name}}` interpolation |
 | `internal/ui` | bubbletea models, panels, keymap, styles |
 | `cmd/grpctui` | Flags, config, `tea.Program` bootstrap |
 
