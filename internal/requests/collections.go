@@ -97,7 +97,7 @@ func LoadCollections(dir string) (Collections, error) {
 
 		path := filepath.Join(dir, entry.Name())
 		col := Collection{Name: collectionName(entry.Name()), Path: path}
-		if err := readYAML(path, &col); err != nil {
+		if err := readYAML(collectionKind, path, &col); err != nil {
 			return Collections{}, err
 		}
 		c.list = append(c.list, col)

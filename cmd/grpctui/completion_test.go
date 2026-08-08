@@ -26,15 +26,25 @@ func TestCompletion(t *testing.T) {
 			script := stdout.String()
 			assert.NotEmpty(t, script)
 
-			// Every script has to be able to offer every subcommand, and to call
-			// back into the hidden helper for the names only grpctui knows. bash
-			// and fish ask for the subcommand list rather than baking it in,
-			// which is why adding one needs no change to them; zsh describes them
-			// inline so that it can put a sentence beside each.
-			for _, cmd := range []string{cmdRun, cmdKeys, cmdCompletion} {
-				assert.True(t,
-					strings.Contains(script, cmd) || strings.Contains(script, cmdComplete+" commands"),
-					"%s completion cannot offer %s", shell, cmd)
+			// Every script has to be able to offer every subcommand, and each does
+			// it one of two ways: bash and fish ask the hidden helper for the
+			// list, which is why adding a subcommand needs no change to them, and
+			// zsh describes them inline so it can put a sentence beside each.
+			// Accepting either for every shell would assert nothing about the two
+			// that always contain the helper call.
+			if shell == shellZsh {
+				for _, cmd := range candidates(kindCommands) {
+					assert.Contains(t, script, "'"+cmd+":", "zsh completion does not describe %s", cmd)
+				}
+			} else {
+				assert.Contains(t, script, cmdComplete+" "+kindCommands,
+					"%s completion does not ask for the subcommand list", shell)
+			}
+
+			// The subcommands that take an argument of their own need a branch
+			// naming them, whichever way the list is offered.
+			for cmd, branch := range argumentBranches(shell) {
+				assert.Contains(t, script, branch, "%s completion has no branch for %s", shell, cmd)
 			}
 			assert.Contains(t, script, cmdComplete)
 
@@ -48,6 +58,57 @@ func TestCompletion(t *testing.T) {
 					want = "-o " + strings.TrimPrefix(name, "-")
 				}
 				assert.Contains(t, script, want, "%s completion does not offer %s", shell, name)
+			}
+		})
+	}
+}
+
+// argumentBranches is what each script must say to complete the argument of a
+// subcommand that takes one: a collection for `run`, a shell for `completion`.
+func argumentBranches(shell string) map[string]string {
+	switch shell {
+	case shellBash:
+		return map[string]string{cmdRun: `== "` + cmdRun + `"`, cmdCompletion: `== "` + cmdCompletion + `"`}
+	case shellZsh:
+		return map[string]string{cmdRun: "\n        " + cmdRun + ")", cmdCompletion: "\n        " + cmdCompletion + ")"}
+	default:
+		return map[string]string{
+			cmdRun:        "__fish_seen_subcommand_from " + cmdRun,
+			cmdCompletion: "__fish_seen_subcommand_from " + cmdCompletion,
+		}
+	}
+}
+
+// TestCompletion_RunOnlyFlagsAreOfferedOnlyAfterRun pins the other half of
+// offering a flag: a completion is a promise the command line will parse.
+// -format and -target are declared by `run` and by nothing else, so a script
+// that offers them after `keys` completes a line that fails with "flag provided
+// but not defined" — which looks like grpctui's bug, not the script's.
+func TestCompletion_RunOnlyFlagsAreOfferedOnlyAfterRun(t *testing.T) {
+	// The line each script puts its run-only flags on, and nowhere else. Every
+	// one of them is reached only once the subcommand is known to be `run`.
+	guards := map[string]string{
+		shellBash: `flags="$flags`,
+		shellZsh:  "extra=(",
+		shellFish: "__fish_seen_subcommand_from " + cmdRun,
+	}
+
+	require.NotEmpty(t, runOnlyFlagNames(), "the test means nothing if no flag is run-only")
+
+	for shell, guard := range guards {
+		t.Run(shell, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			require.Equal(t, exitOK, completion([]string{shell}, &stdout, &stderr))
+
+			for _, name := range runOnlyFlagNames() {
+				bare := strings.TrimPrefix(name, "-")
+				for line := range strings.SplitSeq(stdout.String(), "\n") {
+					if !strings.Contains(line, name) && !strings.Contains(line, "-o "+bare) {
+						continue
+					}
+					assert.Contains(t, line, guard,
+						"%s offers %s outside the branch that knows the subcommand is %s", shell, name, cmdRun)
+				}
 			}
 		})
 	}

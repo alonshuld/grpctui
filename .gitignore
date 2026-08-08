@@ -63,6 +63,10 @@ go.work.sum
 /skills-lock.json
 /.mcp.json
 
+# Demo recordings. `make demos` writes these from docs/demos/*.tape; the tape is
+# what is committed, since a GIF is megabytes that go stale every release.
+/docs/demos/*.gif
+
 # Editor/IDE
 .idea/
 .vscode/

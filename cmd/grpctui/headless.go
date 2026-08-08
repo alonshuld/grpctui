@@ -46,6 +46,11 @@ func runCollection(args []string, stdout, stderr io.Writer) int {
 	}
 	opts.record(fs)
 
+	if opts.showVersion {
+		printVersion(stdout)
+		return exitOK
+	}
+
 	if len(names) != 1 {
 		fs.Usage()
 		_, _ = fmt.Fprintf(stderr, "grpctui: run takes one collection, got %d\n", len(names))

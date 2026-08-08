@@ -119,6 +119,36 @@ func TestVersionUnmarshalYAML(t *testing.T) {
 			yaml:    "version: 0\n",
 			wantErr: "version must be at least 1, got 0",
 		},
+		{
+			// The line somebody started and did not finish. It is absent rather
+			// than a zero: refusing it would refuse the file over a number the
+			// user never typed.
+			name: "a key with nothing after it is absent",
+			yaml: "version:\nother: 2\n",
+			want: 0,
+		},
+		{
+			name: "an explicit null is absent too",
+			yaml: "version: ~\n",
+			want: 0,
+		},
+		{
+			name:    "a block of keys",
+			yaml:    "version:\n  major: 1\n",
+			wantErr: "version must be a whole number like 1, got a block of keys",
+		},
+		{
+			name:    "a list",
+			yaml:    "version:\n  - 1\n",
+			wantErr: "version must be a whole number like 1, got a list",
+		},
+		{
+			// yaml would decode this into an int by truncating it, and a 1.5 read
+			// as 1 is a compatibility claim nobody made.
+			name:    "a number that is not whole",
+			yaml:    "version: 1.5\n",
+			wantErr: `version must be a whole number like 1, got "1.5"`,
+		},
 	}
 
 	for _, tt := range tests {

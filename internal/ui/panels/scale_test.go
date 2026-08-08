@@ -10,8 +10,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/alonshuld/grpctui/internal/grpcclient"
 	"github.com/alonshuld/grpctui/internal/requests"
+	"github.com/alonshuld/grpctui/internal/testschema"
 	"github.com/alonshuld/grpctui/internal/ui/keys"
 	"github.com/alonshuld/grpctui/internal/ui/panels"
 	"github.com/alonshuld/grpctui/internal/ui/styles"
@@ -28,45 +28,22 @@ import (
 // keystroke does not depend on how much there is. Both are here: the benchmarks
 // measure, and the tests pin the shape.
 
-// bigSchema builds a schema of the size v1.0 was validated against: 300
-// services of 10 methods, which is 3,300 rows once every service is expanded
-// and larger than any real API surface the author has met.
+// The schema comes from internal/testschema, which internal/ui measures the
+// whole frame against — two copies of the generator would be one edit away from
+// two suites benchmarking different workloads under the same claim.
 const (
-	bigServices  = 300
-	bigMethods   = 10
-	bigRows      = bigServices * (bigMethods + 1)
+	bigRows      = testschema.BigServices * (testschema.BigMethods + 1)
 	panelWidth   = 40
 	panelHeight  = 30
 	historyDepth = 200
 )
-
-func bigSchema() []grpcclient.Service {
-	services := make([]grpcclient.Service, 0, bigServices)
-	for s := range bigServices {
-		name := fmt.Sprintf("big.v1.Service%03d", s)
-
-		methods := make([]grpcclient.Method, 0, bigMethods)
-		for m := range bigMethods {
-			method := fmt.Sprintf("Method%02d", m)
-			methods = append(methods, grpcclient.Method{
-				Name:            method,
-				FullName:        name + "." + method,
-				InputType:       name + ".Request",
-				OutputType:      name + ".Reply",
-				ServerStreaming: m%3 == 0,
-			})
-		}
-		services = append(services, grpcclient.Service{Name: name, Methods: methods})
-	}
-	return services
-}
 
 func bigTree(tb testing.TB) panels.Tree {
 	tb.Helper()
 
 	tree := panels.NewTree(keys.Default(), styles.New())
 	tree.SetSize(panelWidth, panelHeight)
-	tree.SetServices(bigSchema())
+	tree.SetServices(testschema.Big())
 	tree.Focus()
 	return tree
 }
@@ -104,8 +81,8 @@ func TestTree_ScrollsThroughAWholeBigSchema(t *testing.T) {
 
 	svc, method, ok := tree.Selection()
 	require.True(t, ok, "the cursor has to land on a row, not past the end")
-	assert.Equal(t, fmt.Sprintf("big.v1.Service%03d", bigServices-1), svc.Name)
-	assert.Equal(t, fmt.Sprintf("Method%02d", bigMethods-1), method.Name)
+	assert.Equal(t, testschema.ServiceName(testschema.BigServices-1), svc.Name)
+	assert.Equal(t, testschema.MethodName(testschema.BigMethods-1), method.Name)
 	assert.NotEmpty(t, tree.View())
 }
 
@@ -115,7 +92,7 @@ func TestTree_ScrollsThroughAWholeBigSchema(t *testing.T) {
 // row while the form shows the right one.
 func TestTree_SelectMethodFindsTheLastOne(t *testing.T) {
 	tree := bigTree(t)
-	want := fmt.Sprintf("big.v1.Service%03d.Method%02d", bigServices-1, bigMethods-1)
+	want := testschema.ServiceName(testschema.BigServices-1) + "." + testschema.MethodName(testschema.BigMethods-1)
 
 	_, method, ok := tree.SelectMethod(want)
 
@@ -125,11 +102,11 @@ func TestTree_SelectMethodFindsTheLastOne(t *testing.T) {
 	svc, selected, ok := tree.Selection()
 	require.True(t, ok, "the cursor moves to what was selected")
 	assert.Equal(t, want, selected.FullName)
-	assert.Equal(t, fmt.Sprintf("big.v1.Service%03d", bigServices-1), svc.Name)
+	assert.Equal(t, testschema.ServiceName(testschema.BigServices-1), svc.Name)
 }
 
 func BenchmarkTree_SetServices(b *testing.B) {
-	services := bigSchema()
+	services := testschema.Big()
 	tree := panels.NewTree(keys.Default(), styles.New())
 	tree.SetSize(panelWidth, panelHeight)
 
@@ -173,7 +150,7 @@ func BenchmarkTree_Collapse(b *testing.B) {
 
 func BenchmarkTree_SelectMethod(b *testing.B) {
 	tree := bigTree(b)
-	last := fmt.Sprintf("big.v1.Service%03d.Method%02d", bigServices-1, bigMethods-1)
+	last := testschema.ServiceName(testschema.BigServices-1) + "." + testschema.MethodName(testschema.BigMethods-1)
 
 	for b.Loop() {
 		tree.SelectMethod(last)
@@ -190,7 +167,7 @@ func bigHistory(tb testing.TB) requests.History {
 
 	for i := range historyDepth {
 		h.Add(requests.Request{
-			Method: fmt.Sprintf("big.v1.Service%03d.Method%02d", i%bigServices, i%bigMethods),
+			Method: testschema.ServiceName(i%testschema.BigServices) + "." + testschema.MethodName(i%testschema.BigMethods),
 			Body: map[string]any{
 				"tenant":  fmt.Sprintf("tenant-%03d", i),
 				"user":    map[string]any{"id": i, "email": fmt.Sprintf("user%d@example.com", i)},
@@ -226,33 +203,58 @@ func TestRequests_FilterAcrossAFullHistory(t *testing.T) {
 		"a query matching one entry still renders a list with that entry in it")
 }
 
-// TestRequests_FrameCostGrowsLinearly is the regression test for the browser's
-// worst performance bug: measuring the box's width asked every row for the two
-// column widths, and each of those was a pass over every entry — so a frame was
-// quadratic in the history, and a full one took tens of milliseconds to draw on
-// every keystroke.
+// TestRequests_FrameCostDoesNotGrowWithTheHistory is the regression test for
+// the browser's worst performance bug: measuring the box's width asked every
+// row for the two column widths, and each of those was a pass over every entry
+// — so a frame was quadratic in the history, and a full one took tens of
+// milliseconds to draw on every keystroke.
 //
-// It counts allocations rather than time, because a duration on a shared CI
-// runner is a coin toss and an allocation count is not. Quadratic work shows up
-// as unmistakably here: four times the entries cost sixteen times the passes,
-// where linear costs four.
-func TestRequests_FrameCostGrowsLinearly(t *testing.T) {
-	const small, large = 50, 200
+// It counts *clock reads*, and that is not a curiosity. Time is the obvious
+// thing to measure and useless: a shared CI runner makes a duration a coin
+// toss. Allocations are the next thing to reach for and were worse than
+// useless here — the quadratic work was arithmetic over widths and allocated
+// nothing, so an allocation ratio sat comfortably under its threshold while the
+// frame took 43 times as long. What the passes over the entries did do, every
+// single time, was ask what time it is, since a row's description says how long
+// ago it was sent. Counting that is exact, deterministic, and impossible to
+// satisfy without actually walking the entries.
+//
+// A frame reads the clock once to measure the description column, and once per
+// row it draws. Neither depends on how much history there is, so the count is
+// the same at 50 entries and at 800 — and any pass over the entries that builds
+// a description puts the history's own size into it.
+func TestRequests_FrameCostDoesNotGrowWithTheHistory(t *testing.T) {
+	const small, large = 50, 800
 
-	perFrame := func(entries int) float64 {
+	frame := func(entries int) (clockReads int, allocs float64) {
 		r := requestsWith(t, entries)
-		return testing.AllocsPerRun(20, func() { _ = r.View() })
+		allocs = testing.AllocsPerRun(20, func() { _ = r.View() })
+
+		r.SetClock(func() time.Time {
+			clockReads++
+			return time.Now()
+		})
+		_ = r.View()
+		return clockReads, allocs
 	}
 
-	base := perFrame(small)
-	require.Positive(t, base)
+	baseReads, baseAllocs := frame(small)
+	require.Positive(t, baseReads, "a frame reads the clock, or this measures nothing")
+	require.Positive(t, baseAllocs)
 
-	grown := perFrame(large)
-	ratio := grown / base
+	grownReads, grownAllocs := frame(large)
 
-	assert.Less(t, ratio, 6.0,
-		"four times the history cost %.1f times the allocations per frame: the frame is superlinear in the history",
-		ratio)
+	assert.Equal(t, baseReads, grownReads,
+		"%d times the history read the clock %d times instead of %d: the frame walks the entries",
+		large/small, grownReads, baseReads)
+
+	// The same statement in the other currency, which catches a frame that grows
+	// by building strings rather than by reading the clock. It is a bound rather
+	// than a ratio: nothing about drawing two dozen rows should cost more because
+	// there are more rows out of sight.
+	assert.Less(t, grownAllocs, baseAllocs*1.1,
+		"%d times the history cost %.0f allocations per frame instead of %.0f",
+		large/small, grownAllocs, baseAllocs)
 }
 
 // requestsWith builds a browser holding n history entries.
@@ -263,7 +265,7 @@ func requestsWith(tb testing.TB, n int) panels.Requests {
 	require.NoError(tb, err)
 	for i := range n {
 		h.Add(requests.Request{
-			Method: fmt.Sprintf("big.v1.Service%03d.Method%02d", i%bigServices, i%bigMethods),
+			Method: testschema.ServiceName(i%testschema.BigServices) + "." + testschema.MethodName(i%testschema.BigMethods),
 			Body:   map[string]any{"tenant": fmt.Sprintf("tenant-%03d", i)},
 			SentAt: time.Now(),
 		})

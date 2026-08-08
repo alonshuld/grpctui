@@ -145,4 +145,87 @@ func TestCommandName(t *testing.T) {
 	assert.Equal(t, "grpctui", commandName(nil))
 	assert.Equal(t, "grpctui", commandName([]string{"localhost:50051"}))
 	assert.Equal(t, "grpctui run", commandName([]string{"run", "smoke"}))
+	assert.Equal(t, "grpctui run", commandName([]string{"-config", "ci.yaml", "run", "smoke"}),
+		"the help page for `run` is the one wanted whether or not the flags came first")
+}
+
+func TestSplitCommand(t *testing.T) {
+	tests := []struct {
+		name     string
+		args     []string
+		wantCmd  string
+		wantRest []string
+	}{
+		{
+			name: "nothing at all",
+		},
+		{
+			name: "a target address is not a command",
+			args: []string{"localhost:50051"},
+		},
+		{
+			name:     "the command first",
+			args:     []string{"run", "smoke"},
+			wantCmd:  "run",
+			wantRest: []string{"smoke"},
+		},
+		{
+			// The whole point: this used to dial a host named "keys".
+			name:     "a flag before the command",
+			args:     []string{"-config", "ci.yaml", "keys"},
+			wantCmd:  "keys",
+			wantRest: []string{"-config", "ci.yaml"},
+		},
+		{
+			name:     "a flag joined to its value",
+			args:     []string{"-config=ci.yaml", "keys"},
+			wantCmd:  "keys",
+			wantRest: []string{"-config=ci.yaml"},
+		},
+		{
+			name:     "a boolean flag does not swallow the command",
+			args:     []string{"-tls", "run", "smoke"},
+			wantCmd:  "run",
+			wantRest: []string{"-tls", "smoke"},
+		},
+		{
+			name:     "flags on both sides of the command",
+			args:     []string{"-target", "localhost:50051", "run", "smoke", "-format", "json"},
+			wantCmd:  "run",
+			wantRest: []string{"-target", "localhost:50051", "smoke", "-format", "json"},
+		},
+		{
+			// A profile may be called anything, including "run".
+			name: "a flag's value is not a command",
+			args: []string{"-profile", "run"},
+		},
+		{
+			name: "the hidden callback",
+			args: []string{"__complete", "profiles"},
+
+			wantCmd:  "__complete",
+			wantRest: []string{"profiles"},
+		},
+		{
+			name: "a command after the target is the target's business",
+			args: []string{"localhost:50051", "keys"},
+		},
+		{
+			name: "nothing after -- is a command",
+			args: []string{"--", "keys"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd, rest := splitCommand(tt.args)
+
+			assert.Equal(t, tt.wantCmd, cmd)
+			if tt.wantCmd == "" {
+				assert.Equal(t, tt.args, rest, "an unrecognised line is handed back untouched")
+				return
+			}
+			assert.Equal(t, tt.wantRest, rest)
+		})
+	}
 }

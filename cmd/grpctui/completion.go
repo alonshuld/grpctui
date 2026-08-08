@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -31,13 +32,34 @@ var shells = []string{shellBash, shellZsh, shellFish}
 // completing -profile offers "staging" rather than nothing, and it is the only
 // part that has to read anything.
 func completion(args []string, stdout, stderr io.Writer) int {
-	if len(args) != 1 {
+	// The flags change nothing about a completion script, but they parse here
+	// anyway: `grpctui -config ./ci.yaml completion zsh` is a command line
+	// somebody types by habit, and it should print a script rather than a
+	// lecture. -version is the one that is answered.
+	var opts options
+	fs := newFlagSet("grpctui "+cmdCompletion, &opts, stderr)
+
+	bare, err := parseArgs(fs, args)
+	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return exitOK
+		}
+		return exitUsage
+	}
+	opts.record(fs)
+
+	if opts.showVersion {
+		printVersion(stdout)
+		return exitOK
+	}
+
+	if len(bare) != 1 {
 		_, _ = fmt.Fprintf(stderr, "grpctui: completion takes one shell: %s\n", strings.Join(shells, ", "))
 		return exitUsage
 	}
 
 	var script string
-	switch args[0] {
+	switch bare[0] {
 	case shellBash:
 		script = bashScript()
 	case shellZsh:
@@ -45,7 +67,7 @@ func completion(args []string, stdout, stderr io.Writer) int {
 	case shellFish:
 		script = fishScript()
 	default:
-		_, _ = fmt.Fprintf(stderr, "grpctui: no completion for %q: have %s\n", args[0], strings.Join(shells, ", "))
+		_, _ = fmt.Fprintf(stderr, "grpctui: no completion for %q: have %s\n", bare[0], strings.Join(shells, ", "))
 		return exitUsage
 	}
 
@@ -183,11 +205,35 @@ var pathFlags = []string{
 var dirFlags = []string{flagImportPath, flagCollections}
 
 // flagNames lists every flag, sorted, as the scripts spell them.
-func flagNames() []string {
+func flagNames() []string { return namesFrom(registerFlags, registerRunFlags) }
+
+// baseFlagNames lists the flags every form of the command takes, and
+// runOnlyFlagNames the ones only `run` does.
+//
+// They are offered separately because a completion is a promise: `grpctui keys
+// -f<tab>` offering -format, on a command whose flag set does not have it,
+// completes a command line that then fails with "flag provided but not
+// defined". The shells all know which subcommand is being typed, so each script
+// asks before offering the second list.
+func baseFlagNames() []string { return namesFrom(registerFlags) }
+
+func runOnlyFlagNames() []string {
+	base := baseFlagNames()
+	var only []string
+	for _, name := range flagNames() {
+		if !slices.Contains(base, name) {
+			only = append(only, name)
+		}
+	}
+	return only
+}
+
+func namesFrom(register ...func(*flag.FlagSet, *options)) []string {
 	var opts options
 	fs := flag.NewFlagSet("grpctui", flag.ContinueOnError)
-	registerFlags(fs, &opts)
-	registerRunFlags(fs, &opts)
+	for _, r := range register {
+		r(fs, &opts)
+	}
 
 	var names []string
 	fs.VisitAll(func(f *flag.Flag) { names = append(names, "-"+f.Name) })
@@ -217,7 +263,11 @@ _grpctui() {
     esac
 
     if [[ "$cur" == -* ]]; then
-        COMPREPLY=($(compgen -W "%s" -- "$cur"))
+        local flags="%s"
+        if [[ "${COMP_WORDS[1]}" == "%s" ]]; then
+            flags="$flags %s"
+        fi
+        COMPREPLY=($(compgen -W "$flags" -- "$cur"))
         return
     fi
 
@@ -245,7 +295,9 @@ complete -F _grpctui grpctui
 		strings.Join(namesOf(valueCompletions), "|"),
 		strings.Join(pathFlags, "|"),
 		strings.Join(dirFlags, "|"),
-		strings.Join(flagNames(), " "),
+		strings.Join(baseFlagNames(), " "),
+		cmdRun,
+		strings.Join(runOnlyFlagNames(), " "),
 		cmdRun,
 		cmdCompletion,
 		bashKindCases(),
@@ -284,11 +336,15 @@ func zshScript() string {
 		fmt.Fprintf(&args, "        '-%s[]:directory:_files -/' \\\n", name)
 	}
 
-	var plain []string
+	var plain, runOnly []string
 	for _, name := range flagNames() {
 		bare := strings.TrimPrefix(name, "-")
 		if slices.Contains(namesOf(valueCompletions), bare) ||
 			slices.Contains(pathFlags, bare) || slices.Contains(dirFlags, bare) {
+			continue
+		}
+		if slices.Contains(runOnlyFlagNames(), name) {
+			runOnly = append(runOnly, "'"+name+"[]'")
 			continue
 		}
 		plain = append(plain, "'"+name+"[]'")
@@ -323,8 +379,15 @@ _grpctui() {
         %s) if (( CURRENT == 3 )); then _grpctui_values shells; return; fi ;;
     esac
 
+    # The flags only "run" takes are offered only after it: no other form of the
+    # command declares them, and one completed elsewhere fails to parse.
+    local -a extra
+    if [[ $words[2] == %s ]]; then
+        extra=(%s)
+    fi
+
     _arguments -s \
-%s        %s
+%s        %s "${extra[@]}"
 }
 
 _grpctui "$@"
@@ -334,6 +397,8 @@ _grpctui "$@"
 		cmdCompletion,
 		cmdRun,
 		cmdCompletion,
+		cmdRun,
+		strings.Join(runOnly, " "),
 		args.String(),
 		strings.Join(plain, " \\\n        "),
 	)
@@ -365,6 +430,12 @@ complete -c grpctui -n '__fish_seen_subcommand_from %s' -a '(grpctui __complete 
 		bare := strings.TrimPrefix(name, "-")
 		if slices.Contains(namesOf(valueCompletions), bare) ||
 			slices.Contains(pathFlags, bare) || slices.Contains(dirFlags, bare) {
+			continue
+		}
+		// A run-only flag is offered only after `run`: no other form of the
+		// command declares it, and one completed elsewhere fails to parse.
+		if slices.Contains(runOnlyFlagNames(), name) {
+			fmt.Fprintf(&b, "complete -c grpctui -o %s -n '__fish_seen_subcommand_from %s'\n", bare, cmdRun)
 			continue
 		}
 		fmt.Fprintf(&b, "complete -c grpctui -o %s\n", bare)

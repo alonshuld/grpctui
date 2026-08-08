@@ -34,6 +34,11 @@ func printKeys(args []string, stdout, stderr io.Writer) int {
 	}
 	opts.record(fs)
 
+	if opts.showVersion {
+		printVersion(stdout)
+		return exitOK
+	}
+
 	if fs.NArg() > 0 {
 		_, _ = fmt.Fprintf(stderr, "grpctui: keys takes no arguments, got %q\n", fs.Arg(0))
 		return exitUsage

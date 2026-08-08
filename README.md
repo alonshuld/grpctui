@@ -596,18 +596,20 @@ their meaning.
 
 ## Demos
 
-Three recordings, one per workflow worth seeing before you try it:
+[docs/demos](docs/demos) holds three [VHS](https://github.com/charmbracelet/vhs)
+tapes, one per workflow worth seeing before you try it:
 
-| Workflow | What it shows |
+| Tape | What it records |
 | --- | --- |
-| A first call | Discovery with nothing configured, a generated form, a response |
-| Streaming | A server-streaming call arriving live, and `esc` ending the watch |
-| Collections | Saving a request, finding it in the browser, replaying it |
+| `unary.tape` | Discovery with nothing configured, a generated form, a response |
+| `streaming.tape` | A server-streaming call arriving live, and `esc` ending the watch |
+| `collections.tape` | Saving a request, finding it in the browser, replaying it |
 
-They are recorded from the tapes in [docs/demos](docs/demos), against a real
-server — `make demos` re-records all three, so a demo that goes stale is
-regenerated rather than restaged. See
-[docs/demos/README.md](docs/demos/README.md) for what they need.
+`make demos` records all three as GIFs, against a real server rather than a
+script — so a demo that goes stale is regenerated rather than restaged. The
+recordings are not committed: they are megabytes that go out of date every
+release, and the tape they come from is four lines to read and always current.
+See [docs/demos/README.md](docs/demos/README.md) for what recording them needs.
 
 ## Documentation
 
@@ -615,7 +617,7 @@ regenerated rather than restaged. See
 | --- | --- |
 | [docs/formats.md](docs/formats.md) | The config, collection and history file formats, and the compatibility promise |
 | [docs/keybindings.md](docs/keybindings.md) | Every keybinding and the name it is remapped by |
-| [docs/demos](docs/demos) | The tapes the README's recordings are made from |
+| [docs/demos](docs/demos) | The tapes the demo recordings are made from, and how to record them |
 
 ## Development
 

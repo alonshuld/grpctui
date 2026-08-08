@@ -183,15 +183,50 @@ func read(body []byte) (Version, error) {
 //
 // A written-down zero is refused here rather than passed to [Version.Check],
 // which cannot tell it apart from a key that was never there — and those two
-// deserve opposite answers.
+// deserve opposite answers. A key with *nothing* after it is the third case and
+// goes the other way: `version:` alone is a line somebody started and did not
+// finish, so it is absent, and the file reads as [Current] like every file
+// written before v1.0. Refusing it would fail exactly the compatibility case
+// this package exists to protect, over a zero the user never typed.
 func (v *Version) UnmarshalYAML(node *yaml.Node) error {
+	if node.Tag == nullTag {
+		*v = 0
+		return nil
+	}
+
+	// Only a plain integer counts. yaml decodes 1.5 into an int by truncating it,
+	// and a version silently read as 1 is worse than one refused.
 	var n int
-	if err := node.Decode(&n); err != nil {
-		return fmt.Errorf("version must be a whole number like %s, got %q", Current, node.Value)
+	if node.Kind != yaml.ScalarNode || node.Tag != intTag || node.Decode(&n) != nil {
+		return fmt.Errorf("version must be a whole number like %s, got %s", Current, describe(node))
 	}
 	if n == 0 {
 		return fmt.Errorf("version must be at least %s, got %d", First, n)
 	}
 	*v = Version(n)
 	return nil
+}
+
+// The YAML tags this cares about. A resolved scalar carries one; a mapping or a
+// sequence carries its own, which is what [describe] reports instead.
+const (
+	nullTag = "!!null"
+	intTag  = "!!int"
+)
+
+// describe names what was written where a version belongs.
+//
+// A scalar is quoted, because the user typed those characters and seeing them
+// back is what makes the message actionable. A mapping or a sequence has no
+// Value at all — quoting it yields `""`, which names nothing — so it is
+// reported by shape.
+func describe(node *yaml.Node) string {
+	switch node.Kind {
+	case yaml.MappingNode:
+		return "a block of keys"
+	case yaml.SequenceNode:
+		return "a list"
+	default:
+		return strconv.Quote(node.Value)
+	}
 }
