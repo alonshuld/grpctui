@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -92,8 +93,14 @@ proto:
 }
 
 func TestProto_Paths(t *testing.T) {
+	// The home directory is read from os.UserHomeDir rather than set here:
+	// Windows takes it from USERPROFILE and other sources, so a test that
+	// exported HOME would assert the wrong thing on one of the three platforms
+	// CI runs.
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+
 	t.Setenv("GRPCTUI_TEST_PROTO_DIR", "/srv/protos")
-	t.Setenv("HOME", "/home/tester")
 
 	proto := config.Proto{
 		Files:       []string{"${GRPCTUI_TEST_PROTO_DIR}/api.proto", "~/other.proto"},
@@ -102,8 +109,8 @@ func TestProto_Paths(t *testing.T) {
 
 	files, imports, err := proto.Paths()
 	require.NoError(t, err)
-	assert.Equal(t, []string{"/srv/protos/api.proto", filepath.Join("/home/tester", "other.proto")}, files)
-	assert.Equal(t, []string{"/home/tester", "/srv/protos"}, imports)
+	assert.Equal(t, []string{"/srv/protos/api.proto", filepath.Join(home, "other.proto")}, files)
+	assert.Equal(t, []string{home, "/srv/protos"}, imports)
 }
 
 // TestProto_Paths_MissingVariable pins that a ${VAR} nobody exported is
