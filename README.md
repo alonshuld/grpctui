@@ -28,14 +28,17 @@ API surface with zero configuration.
 ## Install
 
 ```bash
-brew install alonshuld/tap/grpctui                            # macOS and Linux
-go install github.com/alonshuld/grpctui/cmd/grpctui@latest    # any Go toolchain
+go install github.com/alonshuld/grpctui/cmd/grpctui@latest
 ```
 
 Prebuilt binaries for Linux, macOS, and Windows are attached to each
 [GitHub Release](https://github.com/alonshuld/grpctui/releases) — a single
 static binary with no runtime dependencies, so unpacking one onto `$PATH` is the
-third route.
+second route.
+
+Every release also builds a Homebrew cask for macOS and Linux and publishes it
+to `alonshuld/homebrew-tap`, so once that tap is up,
+`brew install alonshuld/tap/grpctui` is the third route.
 
 Then `grpctui <host:port>`, and press `?` for the keys.
 
