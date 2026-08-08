@@ -19,6 +19,7 @@ import (
 	"github.com/alonshuld/grpctui/internal/config"
 	"github.com/alonshuld/grpctui/internal/grpcclient"
 	"github.com/alonshuld/grpctui/internal/logging"
+	"github.com/alonshuld/grpctui/internal/requests"
 	"github.com/alonshuld/grpctui/internal/ui"
 	"github.com/alonshuld/grpctui/internal/version"
 )
@@ -63,6 +64,15 @@ type options struct {
 	logLevel    string
 	callTimeout time.Duration
 	showVersion bool
+
+	// historyFile and collectionsDir are where sent and saved requests live.
+	// Either may be empty, which turns that half off — history keeps working for
+	// the session, saving reports that there is nowhere to save to.
+	historyFile    string
+	collectionsDir string
+
+	// historyLimit caps how many sent requests are kept.
+	historyLimit int
 
 	// given records which flags were actually passed, which is the difference
 	// between "the user asked for plaintext" and "the user said nothing about
@@ -119,6 +129,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 
+	saved, err := loadRequests(opts)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "grpctui: %v\n", err)
+		return exitError
+	}
+
 	logger, closeLog, err := logging.New(logging.Config{File: opts.logFile, Level: opts.logLevel})
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "grpctui: %v\n", err)
@@ -126,7 +142,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	defer func() { _ = closeLog() }()
 
-	if err := start(opts, startup, logger, stdout); err != nil {
+	if err := start(opts, startup, saved, logger, stdout); err != nil {
 		logger.Error("exiting with error", zap.Error(err))
 		_, _ = fmt.Fprintf(stderr, "grpctui: %v\n", err)
 		return exitError
@@ -280,9 +296,36 @@ func loadConfig(opts options) (config.Config, error) {
 	return config.Load(opts.configFile)
 }
 
+// saved is the requests already sent and the ones kept on purpose.
+type saved struct {
+	history     requests.History
+	collections requests.Collections
+}
+
+// loadRequests reads history and collections.
+//
+// A file that cannot be parsed stops startup rather than being replaced or
+// skipped. It is the rule internal/config already follows, and it matters more
+// here: the alternative to an error is grpctui writing a fresh history over the
+// broken one on the very next send, or a collection someone committed silently
+// not being in the list. Either is a way to lose work, and `--history-file=`
+// gets past it in one flag.
+func loadRequests(opts options) (saved, error) {
+	history, err := requests.LoadHistory(opts.historyFile, opts.historyLimit)
+	if err != nil {
+		return saved{}, err
+	}
+
+	collections, err := requests.LoadCollections(opts.collectionsDir)
+	if err != nil {
+		return saved{}, err
+	}
+	return saved{history: history, collections: collections}, nil
+}
+
 // start runs the TUI. Everything it writes goes to out, which is the terminal
 // bubbletea takes over; the logger writes to a file only.
-func start(opts options, startup startup, logger *zap.Logger, out io.Writer) error {
+func start(opts options, startup startup, saved saved, logger *zap.Logger, out io.Writer) error {
 	// SIGINT/SIGTERM cancel in-flight RPCs; bubbletea handles ctrl+c itself,
 	// so this covers signals sent from elsewhere.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -305,6 +348,8 @@ func start(opts options, startup startup, logger *zap.Logger, out io.Writer) err
 		ui.WithCallTimeout(opts.callTimeout),
 		ui.WithDialer(startup.dialer(logger)),
 		ui.WithProfiles(startup.profiles, startup.active),
+		ui.WithHistory(saved.history),
+		ui.WithCollections(saved.collections),
 	)
 	program := tea.NewProgram(model,
 		tea.WithContext(ctx),
@@ -370,6 +415,12 @@ func parseFlags(args []string, stderr io.Writer) (options, error) {
 		"log level: debug, info, warn, error")
 	fs.DurationVar(&opts.callTimeout, "call-timeout", ui.DefaultCallTimeout,
 		"give up on a single call after this long")
+	fs.StringVar(&opts.historyFile, "history-file", requests.DefaultHistoryFile(),
+		"record sent requests in this file; empty keeps history for the session only")
+	fs.IntVar(&opts.historyLimit, "history-limit", requests.DefaultLimit,
+		"how many sent requests to keep")
+	fs.StringVar(&opts.collectionsDir, "collections", requests.DefaultCollectionsDir(),
+		"read and write saved request collections in this `directory`; empty disables saving")
 	fs.BoolVar(&opts.showVersion, "version", false, "print the version and exit")
 
 	fs.Usage = func() {

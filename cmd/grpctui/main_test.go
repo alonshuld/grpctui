@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/alonshuld/grpctui/internal/requests"
 	"github.com/alonshuld/grpctui/internal/ui"
 	"github.com/alonshuld/grpctui/internal/version"
 )
@@ -49,8 +50,17 @@ const runTimeout = 30 * time.Second
 func TestRun(t *testing.T) {
 	// The default config path is derived from the environment, and a real one
 	// on the developer's machine would supply a target these cases assume is
-	// missing.
+	// missing. The state directory goes the same way: the default history file
+	// lives there, and a run of the tests must not read the developer's own.
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	brokenHistory := filepath.Join(t.TempDir(), "history.yaml")
+	require.NoError(t, os.WriteFile(brokenHistory, []byte("requests: [oh dear\n"), 0o600))
+
+	brokenCollections := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(brokenCollections, "team.yaml"), []byte("requests: [oh dear\n"), 0o600))
 
 	tests := map[string]struct {
 		args       []string
@@ -101,6 +111,20 @@ func TestRun(t *testing.T) {
 			wantCode:   exitError,
 			wantStderr: "open config",
 		},
+		// A history file that cannot be parsed stops startup rather than being
+		// quietly overwritten by the first send of the session.
+		"history is malformed": {
+			args:       []string{"--history-file", brokenHistory, "localhost:50051"},
+			wantCode:   exitError,
+			wantStderr: "history.yaml",
+		},
+		// The same for a collection, which somebody hand-wrote and may well have
+		// committed: skipping it looks exactly like a request that never saved.
+		"a collection is malformed": {
+			args:       []string{"--collections", brokenCollections, "localhost:50051"},
+			wantCode:   exitError,
+			wantStderr: "team.yaml",
+		},
 	}
 
 	for name, tt := range tests {
@@ -130,6 +154,51 @@ func TestParseFlags_Defaults(t *testing.T) {
 	assert.Equal(t, "error", opts.logLevel, "a normal run must be near-silent")
 	assert.NotEmpty(t, opts.logFile)
 	assert.Equal(t, ui.DefaultCallTimeout, opts.callTimeout)
+	assert.Equal(t, requests.DefaultLimit, opts.historyLimit)
+}
+
+// Both halves of v0.6's storage can be turned off, and turning one off must not
+// stop grpctui starting: history keeps working for the session, saving reports
+// that there is nowhere to save to.
+func TestLoadRequests_Disabled(t *testing.T) {
+	var stderr bytes.Buffer
+
+	opts, err := parseFlags([]string{
+		"--history-file", "",
+		"--collections", "",
+		"localhost:50051",
+	}, &stderr)
+	require.NoError(t, err)
+
+	saved, err := loadRequests(opts)
+	require.NoError(t, err)
+	assert.Equal(t, 0, saved.history.Len())
+	assert.Equal(t, 0, saved.collections.Len())
+}
+
+func TestLoadRequests(t *testing.T) {
+	dir := t.TempDir()
+	historyFile := filepath.Join(dir, "history.yaml")
+	collectionsDir := filepath.Join(dir, "collections")
+
+	require.NoError(t, os.WriteFile(historyFile,
+		[]byte("requests:\n  - method: a.B\n"), 0o600))
+	require.NoError(t, os.Mkdir(collectionsDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(collectionsDir, "team.yaml"),
+		[]byte("requests:\n  - name: one\n    method: a.B\n"), 0o600))
+
+	var stderr bytes.Buffer
+	opts, err := parseFlags([]string{
+		"--history-file", historyFile,
+		"--collections", collectionsDir,
+		"localhost:50051",
+	}, &stderr)
+	require.NoError(t, err)
+
+	saved, err := loadRequests(opts)
+	require.NoError(t, err)
+	assert.Equal(t, 1, saved.history.Len())
+	assert.Equal(t, []string{"team"}, saved.collections.Names())
 }
 
 func TestParseFlags_Overrides(t *testing.T) {
