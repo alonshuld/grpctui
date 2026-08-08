@@ -358,7 +358,7 @@ func TestResponse_StreamingAppendsBothDirections(t *testing.T) {
 	require.True(t, r.Active(), "an open stream is something esc can cancel")
 
 	r.AppendSent(`{"name": "world"}`, protoschema.FormatJSON, 0)
-	r.AppendReceived(`{"greeting": "hello"}`, protoschema.FormatJSON, 40*time.Millisecond)
+	r.AppendReceived(`{"greeting": "hello"}`, protoschema.FormatJSON, 40*time.Millisecond, nil)
 
 	view := r.View()
 	assert.Contains(t, view, "Watching")
@@ -390,7 +390,7 @@ func TestResponse_StreamingLabelsAConversation(t *testing.T) {
 func TestResponse_StreamFinishesCleanly(t *testing.T) {
 	r := newResponse(t)
 	r.SetStreaming(streamMethod())
-	r.AppendReceived(`{"greeting": "hello"}`, protoschema.FormatJSON, time.Second)
+	r.AppendReceived(`{"greeting": "hello"}`, protoschema.FormatJSON, time.Second, nil)
 
 	r.FinishStream("", grpcclient.CallStatus{}, false, 2*time.Second)
 
@@ -409,7 +409,7 @@ func TestResponse_StreamFinishesCleanly(t *testing.T) {
 func TestResponse_StreamFinishesOnAStatus(t *testing.T) {
 	r := newResponse(t)
 	r.SetStreaming(streamMethod())
-	r.AppendReceived(`{"greeting": "hello"}`, protoschema.FormatJSON, time.Second)
+	r.AppendReceived(`{"greeting": "hello"}`, protoschema.FormatJSON, time.Second, nil)
 
 	status := grpcclient.CallStatus{Code: 7, Name: "PermissionDenied", Message: "not allowed"}
 	r.FinishStream("stream failed", status, true, 2*time.Second)
@@ -452,7 +452,7 @@ func TestResponse_StreamLogIsBounded(t *testing.T) {
 
 	const messages = 600
 	for i := range messages {
-		r.AppendReceived(fmt.Sprintf(`{"n": %d}`, i), protoschema.FormatJSON, time.Duration(i)*time.Millisecond)
+		r.AppendReceived(fmt.Sprintf(`{"n": %d}`, i), protoschema.FormatJSON, time.Duration(i)*time.Millisecond, nil)
 	}
 
 	view := r.View()
@@ -470,13 +470,13 @@ func TestResponse_StreamFollowsTheTailUntilScrolled(t *testing.T) {
 	r.Focus()
 
 	for i := range 20 {
-		r.AppendReceived(fmt.Sprintf(`{"n": %d}`, i), protoschema.FormatJSON, 0)
+		r.AppendReceived(fmt.Sprintf(`{"n": %d}`, i), protoschema.FormatJSON, 0, nil)
 	}
 	require.Contains(t, r.View(), `"n": 19`, "the panel should be following the tail")
 
 	r, _ = r.Update(keyMsg("g")) // top
 
-	r.AppendReceived(`{"n": 20}`, protoschema.FormatJSON, 0)
+	r.AppendReceived(`{"n": 20}`, protoschema.FormatJSON, 0, nil)
 
 	view := r.View()
 	assert.NotContains(t, view, `"n": 20`, "a scrolled-away user must not be yanked back")
@@ -488,7 +488,7 @@ func TestResponse_StreamElapsed(t *testing.T) {
 	r := newResponse(t)
 	r.SetStreaming(streamMethod())
 
-	r.AppendReceived(`{}`, protoschema.FormatJSON, 1500*time.Millisecond)
+	r.AppendReceived(`{}`, protoschema.FormatJSON, 1500*time.Millisecond, nil)
 	assert.Equal(t, 1500*time.Millisecond, r.Elapsed())
 
 	r.SetElapsed(3 * time.Second)

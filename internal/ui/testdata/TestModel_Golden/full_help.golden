@@ -21,4 +21,4 @@ g      top          H     scroll left     esc    cancel         ]         newer 
 G      bottom       L     scroll right    ctrl+r requests       e         environments            
                     w     raw bytes       S      save           v         variables               
                     D     diff            ctrl+p capture        t         traffic                 
-                                          X      grpcurl                                          
+                                          X      grpcurl        T         theme                   

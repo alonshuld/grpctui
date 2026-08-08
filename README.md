@@ -7,7 +7,7 @@ browser tab.
 Point it at a gRPC server with reflection enabled and it discovers the entire
 API surface with zero configuration.
 
-> **Status: v0.7 — Variables & Environments.** Discover a server, fill in a
+> **Status: v0.9 — Polish & Extensibility.** Discover a server, fill in a
 > request form generated from the method's input message — nested messages,
 > repeated fields, maps, `oneof` variants and enums included — send the headers a
 > real service wants alongside it, over TLS or mTLS, switch between saved
@@ -15,7 +15,11 @@ API surface with zero configuration.
 > call you make is remembered, and the ones worth keeping go into named
 > collections you can commit. Write `{{variable}}` anywhere in a request, switch
 > environments to change what it means, and capture a value out of one response
-> to use in the next. Raw-wire and diffing views land in v0.8.
+> to use in the next. When an answer surprises you, read the bytes it arrived
+> as, diff it against the last one, or see where its time went — and put a
+> passive proxy in front of somebody else's client to watch what it sends.
+> Themes, a `.proto` fallback for servers without reflection, remappable keys,
+> shell completions and a headless mode for CI round it off. v1.0 is next.
 
 ## Install
 
@@ -40,40 +44,57 @@ cannot represent — one carrying a `google.protobuf.Any` whose payload type the
 server never described — is shown in protobuf's text format instead, labelled
 as such, rather than reported as a failed call.
 
+There are three forms of the command:
+
 ```
-Flags:
+grpctui [flags] <host:port>        explore a target interactively
+grpctui run [flags] <collection>   replay a saved collection, no UI
+grpctui completion <shell>         print a completion script
+```
+
+`grpctui --help` prints every flag, grouped by what it is for. The ones you
+reach for first:
+
+```
   -profile string     connection profile to start on
   -env string         environment to start in
   -V name=value       variable, referred to as {{name}} in a request; repeatable
+  -H key: value       request header; repeatable
   -tls                connect over TLS
   -cacert string      verify the server against this PEM bundle
-  -cert string        PEM client certificate to present (mutual TLS)
-  -key string         PEM key for -cert
-  -servername string  name to check the certificate against
+  -cert / -key        PEM client certificate and key (mutual TLS)
   -insecure           accept any certificate the server offers
-  -H key: value       request header; repeatable
+  -proto file         discover from this .proto instead of reflection; repeatable
+  -import-path dir    resolve -proto imports against this directory; repeatable
+  -theme name         auto, dark, light, or one your config file names
+  -proxy address      accept gRPC traffic here and forward it, logging what passes
   -config string      read settings from this file; empty skips it
                       (default "$XDG_CONFIG_HOME/grpctui/config.yaml")
-  -log-file string    write logs to this file; empty disables logging
-                      (default "$XDG_STATE_HOME/grpctui/grpctui.log")
-  -log-level string   log level: debug, info, warn, error (default "error")
-  -call-timeout d     give up on a single call after this long (default 1m0s)
-  -history-file str   record sent requests here; empty keeps them for the session
-                      (default "$XDG_STATE_HOME/grpctui/history.yaml")
-  -history-limit n    how many sent requests to keep (default 200)
-  -collections dir    read and write saved collections here; empty disables saving
-                      (default "$XDG_CONFIG_HOME/grpctui/collections")
   -version            print the version and exit
 ```
 
-The target must serve the [gRPC server reflection API][reflection]. In Go, that
-is one line on the server:
+By default the target must serve the [gRPC server reflection API][reflection].
+In Go, that is one line on the server:
 
 ```go
 import "google.golang.org/grpc/reflection"
 
 reflection.Register(srv)
 ```
+
+If it does not — production often does not — point grpctui at the `.proto`
+files instead:
+
+```bash
+grpctui -proto api/v1/greeter.proto -import-path api localhost:50051
+```
+
+Both spellings work: a path on disk, or protoc's `-I` plus a name relative to
+it. Well-known imports (`google/protobuf/timestamp.proto` and friends) resolve
+without a copy on disk. Everything else behaves identically — the request form,
+the raw-wire view and the invoker cannot tell where a descriptor came from. The
+one difference is that the schema comes up even when the server is down, since
+nothing is asked of it until you send.
 
 [reflection]: https://github.com/grpc/grpc/blob/master/doc/server-reflection.md
 
@@ -176,6 +197,18 @@ password containing a literal `$` survives being written down.
 one profile for the session: `grpctui --profile staging --insecure` is your
 saved staging connection with verification off for one run, not a new connection
 that has lost its credentials.
+
+If the servers you work with do not serve reflection, name the `.proto` files
+once and stop passing `-proto`. The files describe an API rather than a
+connection, so they sit at the top level and serve every profile:
+
+```yaml
+proto:
+  files:
+    - api/v1/greeter.proto
+  import_paths:
+    - api
+```
 
 Nothing about the file is guessed at. The default path may be absent — that is
 the zero-config case — but a path you name with `--config` has to exist, and an
@@ -352,6 +385,153 @@ are two syntaxes here and they are deliberately distinct: `${VAR}` is the
 process environment, read once when the config file loads, and `{{name}}` is a
 grpctui variable, resolved when a request is sent.
 
+## Debugging a response
+
+Three keys change what the response panel shows, and the choice survives the
+next call — if you pressed `D` to watch a field change across three sends, that
+is what you meant.
+
+- `w` — the raw wire: a field-by-field listing of the protobuf bytes as a
+  decoder *without* a schema sees them, and a hex dump underneath. This is the
+  view for when the decoded one is wrong: a field the server set that your
+  descriptor does not have, a string that is not the string you expected.
+- `D` — a diff against the previous response from the same method. "The bug is
+  back" and "the bug moved" look nothing alike here.
+- `X` — the request as an equivalent `grpcurl` command, for sharing outside
+  grpctui. Header *names* are exported with placeholder values, the credential
+  is named by kind rather than by value, and `{{variable}}` references are left
+  unexpanded — a command meant to be pasted elsewhere is the last place a token
+  should appear.
+
+The status line under a response carries the latency breakdown gRPC itself
+measured: how long connecting took, how long the server thought, how long the
+answer took to arrive. A wall clock says a call took 800ms; this says whether
+that was the service being slow or the service being far away.
+
+Well-known values are glossed in place — a `google.protobuf.Timestamp` gets
+`← 3 minutes ago` beside it, a `Duration` gets `← 1h30m0s`. The gloss never
+replaces the value: the body stays exactly what the server sent, because the
+case that matters most is the server whose timestamps are wrong. Switch one off
+in the config file if you disagree:
+
+```yaml
+renderers:
+  timestamp: false
+```
+
+## Watching somebody else's traffic
+
+`--proxy` puts grpctui between an existing client and the server:
+
+```bash
+grpctui --proxy localhost:50052 localhost:50051
+```
+
+Point the application at `localhost:50052` and `t` shows every call that goes
+past, with its status and timing. `enter` on one loads it into the request form,
+so a call you did not write is a call you can now replay and edit. The proxy
+adds nothing to the wire — no credential of its own, no rewritten metadata —
+because a wire-watching tool that changed the wire would be worse than useless.
+
+## Themes
+
+`T` opens the theme switcher. Moving the cursor previews each one immediately,
+because a terminal palette is judged by looking at it; `enter` keeps what you
+are looking at, `esc` closes.
+
+Three themes are built in. `auto` is the default and follows your terminal's
+background; `dark` and `light` pin the half `auto` would have guessed, which is
+the fix when a terminal behind tmux or ssh answers wrongly and half the status
+bar goes invisible. `--theme dark` gets you through a session without editing
+anything.
+
+A theme is eight colours, and the config file can name its own:
+
+```yaml
+theme: midnight
+
+themes:
+  - name: midnight
+    base: dark            # start from a built-in; omit for the default
+    colors:
+      primary: "#ff5fd7"
+      error: "196"        # an ANSI index
+      border: "#ccc/#333" # light/dark, following the terminal
+```
+
+The roles are `primary`, `secondary`, `muted`, `border`, `error`, `success`,
+`text` and `inverted`; anything you leave out comes from the base. Taking a
+built-in's name replaces it rather than adding a duplicate to the switcher, so
+you can adjust one colour of `dark` without restating the other seven. A colour
+that will not parse is an error at startup, not a theme that half works.
+
+## Remapping keys
+
+Every binding is addressable by name:
+
+```yaml
+keys:
+  send: ctrl+g
+  history-prev: "<"
+  history-next: ">"
+  traffic: ""        # unbind, and have the key back
+```
+
+Values are comma-separated keys in bubbletea's spelling (`ctrl+s`, `shift+tab`,
+`enter`, `esc`, or a bare character). The `?` help bar documents whatever you
+bound, so it stays truthful for free. Binding an action onto a key another one
+already holds is refused at startup with both names — otherwise remapping
+`send` to `q` would quietly cost you `quit`.
+
+`grpctui __complete actions` lists every name.
+
+## Running a collection in CI
+
+`grpctui run` replays a saved collection with no UI at all, and exits non-zero
+if anything failed:
+
+```bash
+grpctui run smoke -target api.staging.example.com:443 -env staging
+```
+
+```
+✓ login      demo.v1.Auth.Login    41ms
+✓ whoami     demo.v1.Auth.WhoAmI   12ms
+✗ get-order  demo.v1.Orders.Get    NotFound: no such order
+
+2 of 3 passed in 71ms against api.staging.example.com:443
+```
+
+Name one request to run it alone: `grpctui run smoke/login`. Add `-format json`
+for something that parses the log.
+
+Requests run in the order the file lists them, which is what lets a login come
+before the call that uses its token, and every one is attempted — a smoke test
+that stopped at the first problem would tell you about one thing when it could
+have told you about four. What goes out is what the TUI would have sent: the
+same form, the same `{{variable}}` resolution, the same transport. A failing
+request prints its body; a passing one does not, because a CI log with a JSON
+document per request is one nobody scrolls through.
+
+Client-streaming and bidi calls are *skipped* rather than failed — a saved
+request holds one message and those shapes are defined by a sequence — and a
+skipped request does not fail the run. A server-streaming call is drained until
+the stream ends or `-call-timeout` does.
+
+No header name or value ever reaches either report.
+
+## Shell completions
+
+```bash
+grpctui completion bash > /etc/bash_completion.d/grpctui
+grpctui completion zsh  > ~/.zsh/completions/_grpctui
+grpctui completion fish > ~/.config/fish/completions/grpctui.fish
+```
+
+Flags complete everywhere, and `-profile`, `-env` and `-theme` complete with
+the names *your* config file defines — as does the collection argument to
+`run`.
+
 ## Keybindings
 
 | Key | Action |
@@ -372,6 +552,11 @@ grpctui variable, resolved when a request is sent.
 | `e` | Open the environment switcher |
 | `v` | Open the variables list |
 | `ctrl+p` | Capture a value from the last response into a variable |
+| `w` | Toggle the raw wire view of the response |
+| `D` | Toggle the diff against the previous response |
+| `X` | Show the request as a `grpcurl` command |
+| `t` | Open the traffic log (with `--proxy`) |
+| `T` | Open the theme switcher |
 | `[`, `]` | Step back / forward through the requests already sent |
 | `ctrl+r` | Open the saved-request browser |
 | `S` | Save the current request into a collection |
@@ -402,11 +587,17 @@ The codebase is four strictly one-directional layers — transport → domain �
 | --- | --- |
 | `internal/grpcclient` | Dial, TLS/mTLS, credentials, reflection discovery, dynamic invoke |
 | `internal/protoschema` | Descriptor → form-field tree; values → wire message |
-| `internal/config` | `~/.config/grpctui/config.yaml`, connection profiles, environments |
+| `internal/protofiles` | `.proto` source → descriptors, when the target has no reflection |
+| `internal/proxy` | Passive mode: a schema-free proxy that reports what goes past |
+| `internal/config` | `~/.config/grpctui/config.yaml`, profiles, environments, themes, keys |
 | `internal/requests` | Sent-request history and saved collections on disk |
 | `internal/vars` | Variables, environments, `{{name}}` interpolation |
-| `internal/ui` | bubbletea models, panels, keymap, styles |
-| `cmd/grpctui` | Flags, config, `tea.Program` bootstrap |
+| `internal/diff` | Line diff, for comparing one response against the previous |
+| `internal/export` | A request rendered as an equivalent `grpcurl` command |
+| `internal/render` | Response renderers: a gloss beside a well-known type |
+| `internal/runner` | Headless replay of a collection, for CI |
+| `internal/ui` | bubbletea models, panels, keymap, styles, themes |
+| `cmd/grpctui` | Subcommands, flags, config, `tea.Program` bootstrap |
 
 The UI never imports `google.golang.org/grpc`, and the transport layer never
 imports `bubbletea`. That separation is what makes the reflection/invoke core

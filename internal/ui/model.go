@@ -29,6 +29,7 @@ import (
 	"github.com/alonshuld/grpctui/internal/grpcclient"
 	"github.com/alonshuld/grpctui/internal/protoschema"
 	"github.com/alonshuld/grpctui/internal/proxy"
+	"github.com/alonshuld/grpctui/internal/render"
 	"github.com/alonshuld/grpctui/internal/requests"
 	"github.com/alonshuld/grpctui/internal/ui/keys"
 	"github.com/alonshuld/grpctui/internal/ui/panels"
@@ -221,6 +222,41 @@ func WithCollections(c requests.Collections) Option {
 	return func(m *Model) { m.browser.SetCollections(c) }
 }
 
+// WithRenderers sets the response renderers. Without it nothing is glossed,
+// which is a response panel showing exactly the JSON the server sent — the
+// behaviour every version before v0.9 had.
+func WithRenderers(r render.Registry) Option {
+	return func(m *Model) { m.renderers = r }
+}
+
+// WithThemes sets the palettes the switcher offers and which one to start in.
+// active indexes themes; an out-of-range index falls back to the first, which
+// is the built-in default.
+func WithThemes(themes []styles.Theme, active int) Option {
+	return func(m *Model) {
+		if len(themes) == 0 {
+			return
+		}
+		m.themes.SetThemes(themes, active)
+		if theme, ok := m.themes.Active(); ok {
+			m.applyTheme(theme)
+		}
+	}
+}
+
+// WithKeyMap replaces the keybindings, which is how the config file's
+// remappings reach the UI.
+//
+// Every panel is handed the same map, so a remapped key works everywhere it
+// worked before and the help bar documents it without being told — which is the
+// whole reason internal/ui/keys exists as one struct.
+func WithKeyMap(km keys.KeyMap) Option {
+	return func(m *Model) {
+		m.keys = km
+		m.applyKeys(km)
+	}
+}
+
 // Model is grpctui's root model.
 type Model struct {
 	client Client
@@ -262,6 +298,12 @@ type Model struct {
 	// request in front of you, and neither belongs in the tab cycle.
 	export  panels.Export
 	traffic panels.Traffic
+
+	// themes is the palette switcher, and is modal for the same reason again.
+	// It owns the list of themes the way variables owns the bindings, so that
+	// there is one copy of them rather than one the panel draws and another the
+	// model switches between.
+	themes panels.Themes
 
 	// history is every request sent, newest first. It lives on the model rather
 	// than behind the browser because [ and ] walk it with the browser closed.
@@ -351,6 +393,11 @@ type Model struct {
 	// bar, and computeLayout runs twice per keystroke purely for this number.
 	helpH int
 
+	// renderers gloss values inside a response — a timestamp with how long ago
+	// it was. The zero registry annotates nothing, which is what a model built
+	// without [WithRenderers] does.
+	renderers render.Registry
+
 	discoveryTimeout time.Duration
 	callTimeout      time.Duration
 }
@@ -388,6 +435,7 @@ func New(client Client, opts ...Option) Model {
 		variables:        panels.NewVariables(km, st),
 		export:           panels.NewExport(km, st),
 		traffic:          panels.NewTraffic(km, st),
+		themes:           panels.NewThemes(km, st),
 		responses:        make(map[string]string),
 		historyAt:        noHistory,
 		lastCollection:   requests.DefaultCollection,
@@ -417,6 +465,67 @@ func New(client Client, opts ...Option) Model {
 
 // bindings are the variables in force, which the variables panel owns.
 func (m Model) bindings() vars.Set { return m.variables.Set() }
+
+// applyTheme rebuilds the styles from a theme and hands them to everything that
+// draws.
+//
+// There is one list here rather than a loop over an interface because the
+// panels are concrete types held by value: a []interface{ SetStyles(...) } would
+// hold copies, and the copies are what would change colour. The compiler
+// catches a panel left out of it only by the frame staying stubbornly the old
+// colour, so the rule in internal/ui/panels/settings.go is the real guard —
+// [Model.applyKeys] below is the same list for the same reason.
+func (m *Model) applyTheme(theme styles.Theme) {
+	m.styles = styles.NewTheme(theme)
+	st := m.styles
+
+	m.spinner.Style = lipgloss.NewStyle().Foreground(st.Palette.Primary)
+	m.help.Styles.ShortKey = st.Label
+	m.help.Styles.ShortDesc = st.Muted
+	m.help.Styles.FullKey = st.Label
+	m.help.Styles.FullDesc = st.Muted
+
+	m.tree.SetStyles(st)
+	m.request.SetStyles(st)
+	m.metadata.SetStyles(st)
+	m.response.SetStyles(st)
+	m.profiles.SetStyles(st)
+	m.browser.SetStyles(st)
+	m.environments.SetStyles(st)
+	m.variables.SetStyles(st)
+	m.export.SetStyles(st)
+	m.traffic.SetStyles(st)
+	m.themes.SetStyles(st)
+}
+
+// applyKeys hands a keymap to every panel, which is what makes a remapping in
+// the config file reach the keys the panels actually match against.
+func (m *Model) applyKeys(km keys.KeyMap) {
+	m.tree.SetKeys(km)
+	m.request.SetKeys(km)
+	m.metadata.SetKeys(km)
+	m.response.SetKeys(km)
+	m.profiles.SetKeys(km)
+	m.browser.SetKeys(km)
+	m.environments.SetKeys(km)
+	m.variables.SetKeys(km)
+	m.export.SetKeys(km)
+	m.traffic.SetKeys(km)
+	m.themes.SetKeys(km)
+}
+
+// switchTheme applies a theme the switcher chose and marks it active.
+//
+// The help bar is measured again because a theme can change how wide it
+// renders — a bold key style is wider than a plain one — and a stale
+// measurement leaves a row of the layout either overlapping or empty.
+func (m *Model) switchTheme(msg panels.ThemeSelectedMsg) {
+	m.themes.SetActive(msg.Index)
+	m.applyTheme(msg.Theme)
+	m.measureHelp()
+	m.layout()
+	m.logger.Debug("switched theme", zap.String("theme", msg.Theme.Name))
+}
 
 // installEnvironment points the variables panel and the request form at the
 // active environment's bindings.
@@ -605,11 +714,44 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case streamRecvMsg:
 		return m.streamReceived(msg)
 
+	// The choices a modal makes about the session rather than about the request
+	// in front of you: which connection, which environment, which theme, and
+	// what the variables are bound to. They are handled together in
+	// [Model.updateSession] because they are one subject, and because keeping
+	// them here would leave this switch too long to read.
+	case panels.ProfileSelectedMsg, panels.EnvironmentSelectedMsg, panels.ThemeSelectedMsg,
+		panels.VariableBoundMsg, panels.VariableUnboundMsg, panels.VariableCapturedMsg:
+		return m.updateSession(msg)
+
+	case panels.TrafficReplayMsg:
+		return m.replayTraffic(msg)
+
+	case trafficEventMsg:
+		return m.recordTraffic(msg)
+
+	case clientConnectedMsg:
+		return m.finishConnect(msg)
+
+	case spinner.TickMsg:
+		return m.tick(msg)
+	}
+
+	return m.updatePanels(msg)
+}
+
+// updateSession handles the messages the session-wide modals emit: switching
+// connection, environment or theme, and binding or unbinding a variable.
+func (m Model) updateSession(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
 	case panels.ProfileSelectedMsg:
 		return m, m.startConnect(msg)
 
 	case panels.EnvironmentSelectedMsg:
 		return m, m.switchEnvironment(msg)
+
+	case panels.ThemeSelectedMsg:
+		m.switchTheme(msg)
+		return m, nil
 
 	case panels.VariableBoundMsg:
 		m.bind(vars.Variable{Name: msg.Name, Value: msg.Value})
@@ -627,21 +769,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case panels.VariableCapturedMsg:
 		return m.capture(msg)
-
-	case panels.TrafficReplayMsg:
-		return m.replayTraffic(msg)
-
-	case trafficEventMsg:
-		return m.recordTraffic(msg)
-
-	case clientConnectedMsg:
-		return m.finishConnect(msg)
-
-	case spinner.TickMsg:
-		return m.tick(msg)
 	}
-
-	return m.updatePanels(msg)
+	return m, nil
 }
 
 // handleKey handles the keys the root model owns. It reports whether the key
@@ -732,6 +861,11 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 		m.layout()
 		return nil, true
 
+	case key.Matches(msg, m.keys.Themes):
+		m.themes.Open()
+		m.layout()
+		return nil, true
+
 	// The two response renderings are toggled from anywhere rather than only
 	// with the response panel focused. Reaching for the raw bytes is something
 	// you do while looking at a form that produced a surprising answer, and
@@ -782,6 +916,10 @@ func (m *Model) handleModalKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 
 	case m.environments.Opened():
 		m.environments, cmd = m.environments.Update(msg)
+		return cmd, true
+
+	case m.themes.Opened():
+		m.themes, cmd = m.themes.Update(msg)
 		return cmd, true
 
 	case m.browser.Opened():
@@ -1512,7 +1650,7 @@ func (m Model) streamOpened(msg streamOpenedMsg) (tea.Model, tea.Cmd) {
 	}
 
 	m.stream = msg.stream
-	return m, tea.Batch(m.nextSend(), receive(m.stream, m.callSeq, m.elapsed))
+	return m, tea.Batch(m.nextSend(), receive(m.stream, m.callSeq, m.elapsed, m.annotator()))
 }
 
 // nextSend issues the next thing the send queue is waiting to do: one message,
@@ -1583,7 +1721,7 @@ func closeSending(stream grpcclient.Stream, seq int, at func() time.Duration) te
 // receive reads one message off the stream. Each result issues the next
 // receive, which is how a chain of tea.Cmds drains a stream without ever
 // blocking Update.
-func receive(stream grpcclient.Stream, seq int, at func() time.Duration) tea.Cmd {
+func receive(stream grpcclient.Stream, seq int, at func() time.Duration, gloss func(proto.Message, string) []render.Annotation) tea.Cmd {
 	return func() tea.Msg {
 		msg, err := stream.Recv()
 		switch {
@@ -1598,7 +1736,7 @@ func receive(stream grpcclient.Stream, seq int, at func() time.Duration) tea.Cmd
 		if err != nil {
 			return streamRecvMsg{seq: seq, err: err, at: at()}
 		}
-		return streamRecvMsg{seq: seq, body: body, format: format, at: at()}
+		return streamRecvMsg{seq: seq, body: body, format: format, notes: annotate(gloss, msg, body), at: at()}
 	}
 }
 
@@ -1647,9 +1785,9 @@ func (m Model) streamReceived(msg streamRecvMsg) (tea.Model, tea.Cmd) {
 		return m.finishStream(msg)
 	}
 
-	m.response.AppendReceived(msg.body, msg.format, msg.at)
+	m.response.AppendReceived(msg.body, msg.format, msg.at, msg.notes)
 	m.layout()
-	return m, receive(m.stream, m.callSeq, m.elapsed)
+	return m, receive(m.stream, m.callSeq, m.elapsed, m.annotator())
 }
 
 // finishStream closes the stream out, leaving everything it carried on screen.
@@ -1682,6 +1820,31 @@ func (m *Model) dropStream() {
 	m.closeAfterQueue = false
 }
 
+// annotator is the glossing function the call commands carry.
+//
+// It is a closure rather than the registry itself because the commands run off
+// the Update goroutine, where reading the model would be a race. Capturing the
+// registry and the clock — both values — is what lets a command annotate a
+// response without touching anything the UI still owns.
+func (m Model) annotator() func(proto.Message, string) []render.Annotation {
+	registry, now := m.renderers, m.now
+	if registry.Empty() {
+		return nil
+	}
+	return func(msg proto.Message, body string) []render.Annotation {
+		return registry.Annotate(msg, body, now())
+	}
+}
+
+// annotate applies an annotator that may be nil, which is what a session with
+// every renderer switched off has.
+func annotate(f func(proto.Message, string) []render.Annotation, msg proto.Message, body string) []render.Annotation {
+	if f == nil {
+		return nil
+	}
+	return f(msg, body)
+}
+
 // elapsed reports how long the current stream has been running. It is passed
 // into the stream's commands as a function, so that each one timestamps itself
 // when it actually happens rather than when it was created.
@@ -1707,7 +1870,7 @@ func (m *Model) startCall(req panels.SendRequestMsg, md grpcclient.Metadata) tea
 
 	tick := m.response.SetInFlight(req.Method)
 	m.layout()
-	return tea.Batch(tick, invoke(ctx, cancel, m.client, req, md, m.callSeq))
+	return tea.Batch(tick, invoke(ctx, cancel, m.client, req, md, m.callSeq, m.annotator()))
 }
 
 // invoke runs the call off the Update goroutine, decoding the response there
@@ -1717,7 +1880,7 @@ func (m *Model) startCall(req panels.SendRequestMsg, md grpcclient.Metadata) tea
 // per response, and Update is not the place for any of it. A message that will
 // not re-encode simply has no raw view — the call itself succeeded, and
 // reporting it as failed over a rendering would be absurd.
-func invoke(ctx context.Context, cancel context.CancelFunc, client Invoker, req panels.SendRequestMsg, md grpcclient.Metadata, seq int) tea.Cmd {
+func invoke(ctx context.Context, cancel context.CancelFunc, client Invoker, req panels.SendRequestMsg, md grpcclient.Metadata, seq int, gloss func(proto.Message, string) []render.Annotation) tea.Cmd {
 	method := req.Method.FullName
 	return func() tea.Msg {
 		defer cancel()
@@ -1740,6 +1903,7 @@ func invoke(ctx context.Context, cancel context.CancelFunc, client Invoker, req 
 			body:     body,
 			format:   format,
 			wire:     wire,
+			notes:    annotate(gloss, resp.Message, body),
 			duration: resp.Duration,
 			timing:   resp.Timing,
 		}
@@ -1768,6 +1932,7 @@ func (m Model) finishCall(msg callFinishedMsg) (tea.Model, tea.Cmd) {
 		Previous: m.responses[msg.method],
 		Took:     msg.duration,
 		Timing:   msg.timing,
+		Notes:    msg.notes,
 	})
 	m.remember(msg.method, msg.body)
 
@@ -2043,6 +2208,8 @@ func (m Model) View() string {
 		screen = m.centred(m.traffic.View())
 	case m.export.Opened():
 		screen = m.centred(m.export.View())
+	case m.themes.Opened():
+		screen = m.centred(m.themes.View())
 	case m.state == stateConnecting:
 		screen = m.centred(fmt.Sprintf("%s Connecting to %s…",
 			m.spinner.View(), m.styles.Value.Render(m.target())))
@@ -2211,8 +2378,11 @@ func (m Model) errorBox() string {
 	hint := "Check the address and that the server is reachable."
 	if errors.Is(m.err, grpcclient.ErrReflectionUnavailable) {
 		title = "Server reflection unavailable"
+		// The fix is now a flag rather than a future version, so the hint names
+		// it: somebody on this screen wants the next thing to type, not a
+		// roadmap entry.
 		hint = "The target is reachable but does not serve the reflection API.\n" +
-			"Enable reflection on the server, or use .proto-file mode (v0.9)."
+			"Enable reflection on the server, or restart with --proto <file>."
 	}
 
 	lines := []string{
@@ -2275,6 +2445,7 @@ func (m *Model) layout() {
 	m.variables.SetSize(m.width, m.height)
 	m.traffic.SetSize(m.width, m.height)
 	m.export.SetSize(m.width, m.height)
+	m.themes.SetSize(m.width, m.height)
 }
 
 func (m Model) computeLayout() layoutSizes {

@@ -1,8 +1,10 @@
 // Package styles holds grpctui's lipgloss styles.
 //
 // Like internal/ui/keys it is a leaf package, so the root model and the panels
-// share one definition of how things look. Themes (v0.9) become alternative
-// constructors here.
+// share one definition of how things look. Themes are [Theme] values in
+// theme.go, and every style below is a function of a theme's eight colours —
+// which is what makes switching one at runtime a matter of handing the panels a
+// new [Styles] rather than rebuilding them.
 package styles
 
 import "github.com/charmbracelet/lipgloss"
@@ -35,6 +37,11 @@ func DefaultPalette() Palette {
 
 // Styles is the full set of styles used by the UI.
 type Styles struct {
+	// Theme is the theme these styles were built from. It is carried so that
+	// the switcher can say which one is active without the model holding a
+	// second copy beside the styles it draws with.
+	Theme Theme
+
 	Palette Palette
 
 	Panel        lipgloss.Style
@@ -87,7 +94,7 @@ type Styles struct {
 	// rather than a green/red pair of their own: a line that has appeared and a
 	// line that has gone are not good and bad news, but they are the same two
 	// directions every diff a developer reads uses, and reusing the palette
-	// keeps a theme (v0.9) to one place. The gutter carries a + or a -, so the
+	// keeps a theme to one place. The gutter carries a + or a -, so the
 	// distinction survives a monochrome terminal.
 	DiffAdded   lipgloss.Style
 	DiffRemoved lipgloss.Style
@@ -106,8 +113,15 @@ type Styles struct {
 }
 
 // New builds the default styles.
-func New() Styles {
-	p := DefaultPalette()
+func New() Styles { return NewTheme(DefaultTheme()) }
+
+// NewTheme builds the styles for a theme.
+//
+// Every style in the returned set is a function of the theme's eight colours
+// and nothing else, which is what makes switching theme at runtime a matter of
+// handing the panels a new [Styles] rather than rebuilding them.
+func NewTheme(theme Theme) Styles {
+	p := theme.Palette
 
 	panel := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -121,6 +135,7 @@ func New() Styles {
 		BorderForeground(p.Primary)
 
 	return Styles{
+		Theme:        theme,
 		Palette:      p,
 		Panel:        panel,
 		PanelFocused: focused,

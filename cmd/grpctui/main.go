@@ -19,7 +19,7 @@ import (
 
 	"github.com/alonshuld/grpctui/internal/config"
 	"github.com/alonshuld/grpctui/internal/grpcclient"
-	"github.com/alonshuld/grpctui/internal/logging"
+	"github.com/alonshuld/grpctui/internal/protofiles"
 	"github.com/alonshuld/grpctui/internal/proxy"
 	"github.com/alonshuld/grpctui/internal/requests"
 	"github.com/alonshuld/grpctui/internal/ui"
@@ -69,6 +69,20 @@ type options struct {
 	// headers are added to the profile's own, in `key: value` form.
 	headers headerList
 
+	// protoFiles are .proto sources to discover from instead of asking the
+	// target, and importPaths the directories their imports resolve against.
+	// Both are repeatable, and empty means discovery by reflection.
+	protoFiles  pathList
+	importPaths pathList
+
+	// theme names the palette to draw in, from the built-in ones or the config
+	// file's `themes` list.
+	theme string
+
+	// format is how a headless run reports itself: text or json. It is unused
+	// by the interactive command, which reports itself by being on screen.
+	format string
+
 	logFile     string
 	logLevel    string
 	callTimeout time.Duration
@@ -111,6 +125,21 @@ func (h *headerList) Set(value string) error {
 	return nil
 }
 
+// pathList collects a repeatable path flag: -proto and -import-path.
+type pathList []string
+
+// String implements [flag.Value].
+func (p *pathList) String() string { return strings.Join(*p, ", ") }
+
+// Set implements [flag.Value].
+func (p *pathList) Set(value string) error {
+	if value == "" {
+		return errors.New("want a path, got an empty one")
+	}
+	*p = append(*p, value)
+	return nil
+}
+
 // assignmentList collects a repeatable -V flag.
 //
 // It is separate from [headerList] only so that -V's names can be checked as
@@ -146,6 +175,26 @@ func (a *assignmentList) Set(value string) error {
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
+	// Help is answered before anything is parsed, so that it reaches stdout and
+	// exits 0 — a help page on stderr cannot be piped into a pager, and one that
+	// exits 2 breaks `grpctui --help && …`.
+	if wantsHelp(args) {
+		var opts options
+		printUsage(stdout, newFlagSet(commandName(args), &opts, stdout))
+		return exitOK
+	}
+
+	if len(args) > 0 {
+		switch args[0] {
+		case cmdRun:
+			return runCollection(args[1:], stdout, stderr)
+		case cmdCompletion:
+			return completion(args[1:], stdout, stderr)
+		case cmdComplete:
+			return completeValues(args[1:], stdout)
+		}
+	}
+
 	opts, err := parseFlags(args, stderr)
 	switch {
 	case errors.Is(err, flag.ErrHelp):
@@ -160,48 +209,38 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitOK
 	}
 
-	cfg, err := loadConfig(opts)
+	session, err := prepare(opts)
 	if err != nil {
+		// A missing target is the one startup failure that is a usage error:
+		// there is nothing wrong with the configuration, the user simply has not
+		// said where to connect. Everything else is a problem with something
+		// they wrote down, and the help page would only be in the way of it.
+		code := exitError
+		if err.Error() == missingTarget {
+			opts.usage()
+			code = exitUsage
+		}
 		_, _ = fmt.Fprintf(stderr, "grpctui: %v\n", err)
-		return exitError
+		return code
 	}
+	defer session.close()
 
-	envs, err := environments(cfg, opts)
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "grpctui: %v\n", err)
-		return exitError
-	}
-
-	startup, err := connections(cfg, opts, envs.target())
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "grpctui: %v\n", err)
-		return exitError
-	}
-	if startup.profile().Target == "" {
-		opts.usage()
-		_, _ = fmt.Fprintf(stderr, "grpctui: missing target address\n")
-		return exitUsage
-	}
-
-	saved, err := loadRequests(opts)
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "grpctui: %v\n", err)
-		return exitError
-	}
-
-	logger, closeLog, err := logging.New(logging.Config{File: opts.logFile, Level: opts.logLevel})
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "grpctui: %v\n", err)
-		return exitError
-	}
-	defer func() { _ = closeLog() }()
-
-	if err := start(opts, startup, envs, saved, logger, stdout); err != nil {
-		logger.Error("exiting with error", zap.Error(err))
+	if err := start(opts, session, stdout); err != nil {
+		session.logger.Error("exiting with error", zap.Error(err))
 		_, _ = fmt.Fprintf(stderr, "grpctui: %v\n", err)
 		return exitError
 	}
 	return exitOK
+}
+
+// commandName is what the help page is being asked for: `grpctui run` has a
+// flag the interactive command does not, and printing it under the wrong
+// heading — or not at all — is the sort of thing help pages are blamed for.
+func commandName(args []string) string {
+	if len(args) > 0 && args[0] == cmdRun {
+		return "grpctui " + cmdRun
+	}
+	return "grpctui"
 }
 
 // startup is everything the flags and the config file decide before anything is
@@ -218,6 +257,12 @@ type startup struct {
 	problems []error
 
 	active int
+
+	// schema is the .proto-file fallback, empty unless -proto was given. It is
+	// a property of the session rather than of one profile: the files describe
+	// an API, and switching to another connection serving the same API must not
+	// mean losing them.
+	schema protofiles.Schema
 }
 
 // environs is everything the flags and the config file decide about variables:
@@ -390,18 +435,18 @@ func applyFlags(p grpcclient.Profile, opts options) (grpcclient.Profile, error) 
 		name string
 		set  func()
 	}{
-		{"cacert", func() { p.Security.CACert = opts.caCert }},
-		{"cert", func() { p.Security.ClientCert = opts.clientCert }},
-		{"key", func() { p.Security.ClientKey = opts.clientKey }},
-		{"servername", func() { p.Security.ServerName = opts.serverName }},
-		{"insecure", func() { p.Security.InsecureSkipVerify = opts.insecure }},
+		{flagCACert, func() { p.Security.CACert = opts.caCert }},
+		{flagCert, func() { p.Security.ClientCert = opts.clientCert }},
+		{flagKey, func() { p.Security.ClientKey = opts.clientKey }},
+		{flagServerName, func() { p.Security.ServerName = opts.serverName }},
+		{flagInsecure, func() { p.Security.InsecureSkipVerify = opts.insecure }},
 	} {
 		if opts.given[f.name] {
 			f.set()
 			p.Security.TLS = true
 		}
 	}
-	if opts.given["tls"] {
+	if opts.given[flagTLS] {
 		p.Security.TLS = opts.tls
 	}
 
@@ -478,13 +523,15 @@ func loadRequests(opts options) (saved, error) {
 
 // start runs the TUI. Everything it writes goes to out, which is the terminal
 // bubbletea takes over; the logger writes to a file only.
-func start(opts options, startup startup, envs environs, saved saved, logger *zap.Logger, out io.Writer) error {
+func start(opts options, s session, out io.Writer) error {
+	startup, envs, saved, look, logger := s.startup, s.envs, s.saved, s.look, s.logger
+
 	// SIGINT/SIGTERM cancel in-flight RPCs; bubbletea handles ctrl+c itself,
 	// so this covers signals sent from elsewhere.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	client, err := grpcclient.DialProfile(startup.profile(), grpcclient.WithLogger(logger))
+	client, err := grpcclient.DialProfile(startup.profile(), dialOptions(startup.schema, logger)...)
 	if err != nil {
 		return err
 	}
@@ -508,6 +555,9 @@ func start(opts options, startup startup, envs environs, saved saved, logger *za
 		ui.WithEnvironments(envs.list, envs.active),
 		ui.WithHistory(saved.history),
 		ui.WithCollections(saved.collections),
+		ui.WithThemes(look.palettes.list, look.palettes.active),
+		ui.WithKeyMap(look.keys),
+		ui.WithRenderers(look.renderers),
 	}
 
 	if opts.proxy != "" {
@@ -601,85 +651,56 @@ func (s startup) dialer(logger *zap.Logger) ui.DialerFunc {
 		if err := s.problem(profile.Name); err != nil {
 			return nil, err
 		}
-		return grpcclient.DialProfile(profile, grpcclient.WithLogger(logger))
+		return grpcclient.DialProfile(profile, dialOptions(s.schema, logger)...)
 	}
 }
 
 func parseFlags(args []string, stderr io.Writer) (options, error) {
 	var opts options
 
-	fs := flag.NewFlagSet("grpctui", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	fs.StringVar(&opts.configFile, "config", config.DefaultPath(),
-		"read settings from this file; empty skips it")
-	fs.StringVar(&opts.profile, "profile", "",
-		"connection profile to start on; defaults to the first configured")
-	fs.StringVar(&opts.env, "env", "",
-		"environment to start in; defaults to the first configured")
-	fs.Var(&opts.variables, "V",
-		"variable as `name=value`, referred to as {{name}} in a request; repeatable")
-	fs.BoolVar(&opts.tls, "tls", false,
-		"connect over TLS; implied by -cacert, -cert, -key, -servername and -insecure")
-	fs.StringVar(&opts.caCert, "cacert", "",
-		"verify the server against this PEM bundle instead of the system trust store")
-	fs.StringVar(&opts.clientCert, "cert", "",
-		"PEM client certificate to present to the server (mutual TLS)")
-	fs.StringVar(&opts.clientKey, "key", "",
-		"PEM key for -cert")
-	fs.StringVar(&opts.serverName, "servername", "",
-		"name to check the server's certificate against, if not the address dialled")
-	fs.BoolVar(&opts.insecure, "insecure", false,
-		"accept any certificate the server offers; the connection is no longer authenticated")
-	fs.Var(&opts.headers, "H",
-		"request header as `key: value`; repeatable")
-	fs.StringVar(&opts.logFile, "log-file", logging.DefaultFile(),
-		"write logs to this file; empty disables logging")
-	fs.StringVar(&opts.logLevel, "log-level", "error",
-		"log level: debug, info, warn, error")
-	fs.DurationVar(&opts.callTimeout, "call-timeout", ui.DefaultCallTimeout,
-		"give up on a single call after this long")
-	fs.StringVar(&opts.historyFile, "history-file", requests.DefaultHistoryFile(),
-		"record sent requests in this file; empty keeps history for the session only")
-	fs.IntVar(&opts.historyLimit, "history-limit", requests.DefaultLimit,
-		"how many sent requests to keep")
-	fs.StringVar(&opts.collectionsDir, "collections", requests.DefaultCollectionsDir(),
-		"read and write saved request collections in this `directory`; empty disables saving")
-	fs.StringVar(&opts.proxy, "proxy", "",
-		"accept gRPC traffic on this `address` and forward it to the target, logging what goes past")
-	fs.BoolVar(&opts.showVersion, "version", false, "print the version and exit")
+	fs := newFlagSet("grpctui", &opts, stderr)
 
-	fs.Usage = func() {
-		_, _ = fmt.Fprintf(stderr, "grpctui — a terminal UI for gRPC\n\n")
-		_, _ = fmt.Fprintf(stderr, "Usage:\n  grpctui [flags] <host:port>\n\n"+
-			"The target may also come from the config file — its `target` key, the\n"+
-			"profile named by -profile, or the environment named by -env — in which\n"+
-			"case it can be left off the command line.\n\nFlags:\n")
-		fs.PrintDefaults()
-	}
-	opts.usage = fs.Usage
-
-	if err := fs.Parse(args); err != nil {
+	targets, err := parseArgs(fs, args)
+	if err != nil {
 		return opts, err
 	}
-
-	// Visit reports only the flags actually given, which is the difference
-	// between "the user chose this config file" and "this is where one would
-	// live" — and, for the security flags, between an instruction and a default.
-	opts.given = make(map[string]bool)
-	fs.Visit(func(f *flag.Flag) {
-		opts.given[f.Name] = true
-	})
-	opts.configNamed = opts.given["config"]
+	opts.record(fs)
 
 	// A missing target is not decided here: it may still come from the config
 	// file, which is loaded once the flags — including --config — are known.
-	if fs.NArg() > 1 {
+	if len(targets) > 1 {
 		fs.Usage()
-		return opts, fmt.Errorf("expected one target address, got %d", fs.NArg())
+		return opts, fmt.Errorf("expected one target address, got %d", len(targets))
 	}
-	if fs.NArg() == 1 {
-		opts.target = fs.Arg(0)
+	if len(targets) == 1 {
+		opts.target = targets[0]
 	}
 
 	return opts, nil
+}
+
+// newFlagSet builds a flag set with grpctui's flags on it and its help page
+// attached.
+func newFlagSet(name string, opts *options, stderr io.Writer) *flag.FlagSet {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	registerFlags(fs, opts)
+	if name != "grpctui" {
+		registerRunFlags(fs, opts)
+	}
+
+	fs.Usage = func() { printUsage(stderr, fs) }
+	opts.usage = fs.Usage
+	return fs
+}
+
+// record notes which flags were actually given, which is the difference between
+// "the user chose this config file" and "this is where one would live" — and,
+// for the security flags, between an instruction and a default.
+func (o *options) record(fs *flag.FlagSet) {
+	o.given = make(map[string]bool)
+	fs.Visit(func(f *flag.Flag) {
+		o.given[f.Name] = true
+	})
+	o.configNamed = o.given[flagConfig]
 }
