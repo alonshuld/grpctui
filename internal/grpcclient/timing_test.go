@@ -26,7 +26,11 @@ func TestInvokeUnaryMeasuresTheCall(t *testing.T) {
 	require.True(t, timing.Measured, "no breakdown was collected")
 
 	t.Run("the parts fit inside the whole", func(t *testing.T) {
-		assert.Positive(t, timing.Total)
+		// The ordering, not the magnitudes: a call over bufconn can finish
+		// inside the clock's resolution, so every one of these may legitimately
+		// be zero. The exact arithmetic is pinned against a clock that does not
+		// move on its own, in timing_internal_test.go.
+		assert.GreaterOrEqual(t, timing.Total, time.Duration(0))
 		assert.GreaterOrEqual(t, timing.Total, timing.FirstByte)
 		assert.GreaterOrEqual(t, timing.FirstByte, timing.Connect)
 		assert.GreaterOrEqual(t, timing.Connect, time.Duration(0))

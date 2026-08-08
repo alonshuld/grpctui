@@ -77,7 +77,12 @@ func TestClient_InvokeUnary(t *testing.T) {
 	})
 
 	t.Run("times the call", func(t *testing.T) {
-		assert.Positive(t, resp.Duration)
+		// Not Positive: a call over bufconn can finish inside the clock's own
+		// resolution, and Windows' is coarse enough to return exactly zero. The
+		// assertion that means something is that the duration is a plausible
+		// one — non-negative, and nowhere near the call timeout.
+		assert.GreaterOrEqual(t, resp.Duration, time.Duration(0))
+		assert.Less(t, resp.Duration, time.Second)
 	})
 }
 
