@@ -46,6 +46,8 @@ linters:
     - bidichk
     - containedctx
     - fatcontext
+    # architecture
+    - depguard
     # logging
     - loggercheck
     # testing
@@ -98,13 +100,75 @@ linters:
           - funlen
           - goconst
           - gosec
-      # The bubbletea Update/View switch is a dispatch table; splitting it to
-      # satisfy a complexity budget makes it harder to read, not easier.
-      - path: internal/ui/model\.go
+      # The bubbletea Update switch and the key handler beneath it are dispatch
+      # tables; splitting one to satisfy a complexity budget makes it harder to
+      # read, not easier.
+      - path: internal/ui/update\.go
         linters:
           - gocyclo
 
   settings:
+    # The layering rule — transport → domain → UI → main — is the structural
+    # invariant this repo is built on, and until now it was enforced by nothing
+    # but the reader. These rules are that rule, spelled out. A file glob is
+    # matched against the absolute path, so every pattern is anchored on the
+    # package directory rather than on the module root.
+    depguard:
+      rules:
+        # A TUI owns the terminal: anything writing to stdout or stderr behind
+        # bubbletea's back corrupts the render. internal/logging hands a
+        # *zap.Logger down through constructors and that is the only logger.
+        logging:
+          files:
+            - $all
+          deny:
+            - pkg: log
+              desc: use internal/logging and a *zap.Logger; the standard logger writes to stderr and corrupts the render
+            - pkg: log/slog
+              desc: use internal/logging and a *zap.Logger; this project has one logger package
+        # The UI drives calls through internal/grpcclient, which exposes plain
+        # Go types. A panel reaching for grpc itself is the layering breaking.
+        # Tests are exempt: internal/ui's integration test runs a real server
+        # over bufconn, and the unit tests assert on gRPC status codes.
+        ui-no-transport:
+          files:
+            - "**/internal/ui/**"
+            - "!$test"
+          deny:
+            - pkg: google.golang.org/grpc
+              desc: the UI layer talks to internal/grpcclient, never to grpc directly
+            - pkg: github.com/jhump/protoreflect
+              desc: reflection belongs to internal/grpcclient; the UI walks a []*protoschema.Node
+        # The other direction of the same rule. Transport and schema packages
+        # are testable without a terminal precisely because no terminal library
+        # reaches them — including from their tests, hence no $test exemption.
+        transport-no-ui:
+          files:
+            - "**/internal/grpcclient/**"
+            - "**/internal/proxy/**"
+            - "**/internal/protofiles/**"
+            - "**/internal/protoschema/**"
+          deny:
+            - pkg: github.com/charmbracelet
+              desc: the transport and schema layers must stay renderable-free; return plain Go types and let internal/ui draw them
+            - pkg: github.com/alonshuld/grpctui/internal/ui
+              desc: layering is one-directional — the UI imports transport, never the reverse
+        # Storage, variables, config and the format check are leaves or near
+        # leaves: YAML in, values out. Protobuf entering one of them is the
+        # JSON mapping escaping internal/protoschema, which owns it alone.
+        storage-leaves:
+          files:
+            - "**/internal/requests/**"
+            - "**/internal/vars/**"
+            - "**/internal/format/**"
+            - "**/internal/config/**"
+          deny:
+            - pkg: google.golang.org/protobuf
+              desc: storage stays a storage layer; encode and decode a body through internal/protoschema
+            - pkg: google.golang.org/grpc
+              desc: these packages describe a connection, they do not make one
+            - pkg: github.com/charmbracelet
+              desc: a theme is colour names in YAML here; lipgloss belongs to internal/ui/styles
     dupl:
       threshold: 150
     errcheck:

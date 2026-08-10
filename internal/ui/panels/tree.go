@@ -1,6 +1,8 @@
-// Package panels holds grpctui's child models — one file per panel. Each panel
-// owns its own Update/View and knows nothing about its siblings; the root model
-// in internal/ui wires them together and decides which one has focus.
+// Package panels holds grpctui's child models — one file per panel, or a small
+// group of files sharing its name where a panel has grown a distinct editing or
+// rendering half. Each panel owns its own Update/View and knows nothing about
+// its siblings; the root model in internal/ui wires them together and decides
+// which one has focus.
 package panels
 
 import (
