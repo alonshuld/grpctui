@@ -40,6 +40,44 @@ Every release also builds a Homebrew cask for macOS and Linux and publishes it
 to `alonshuld/homebrew-tap`, so once that tap is up,
 `brew install alonshuld/tap/grpctui` is the third route.
 
+The fourth is Docker — `alonshuld/grpctui`, `linux/amd64` and `linux/arm64`,
+tagged with each version and `latest`:
+
+```bash
+docker run -it --rm --network host \
+  -v ~/.config/grpctui:/config/grpctui \
+  -v ~/.local/state/grpctui:/state/grpctui \
+  alonshuld/grpctui localhost:50051
+```
+
+Three parts of that are load-bearing. `-it` gives the TUI a terminal, without
+which it has nothing to draw on. `--network host` is what makes `localhost` mean
+your machine rather than the container — on Docker Desktop, drop it and use
+`host.docker.internal:50051` instead. The two mounts are what make config,
+history and collections outlive the container; skip them and the container is a
+scratch session, which for a one-off call against a remote target is often what
+you want.
+
+The image runs as root by default, so anything it writes into those mounts is
+root-owned on the host. `--user "$(id -u):$(id -g)"` fixes that and still works:
+the config and state paths are pinned with `XDG_CONFIG_HOME` and
+`XDG_STATE_HOME` rather than derived from `$HOME`, precisely so that a container
+running as an arbitrary uid still finds its files.
+
+The image is a full Alpine userland with `vim`, `nano` and `less` in it rather
+than a scratch or distroless base, so `docker run -it --entrypoint sh` gets you
+a shell to edit a config in. Bear in mind that editing a config that is not
+mounted only lasts as long as the container.
+
+Headless replay works the same way and is the case a container is genuinely
+better at, since it needs no terminal and no mounts beyond the collection:
+
+```bash
+docker run --rm --network host \
+  -v "$PWD/smoke.yaml:/config/grpctui/collections/smoke.yaml" \
+  alonshuld/grpctui run smoke -target localhost:50051
+```
+
 Then `grpctui <host:port>`, and press `?` for the keys.
 
 ## Usage

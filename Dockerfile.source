@@ -1,0 +1,55 @@
+# Builds an image for a version that was tagged before grpctui shipped a
+# Dockerfile — see .github/workflows/docker-backfill.yml. The release path is
+# Dockerfile, which packages the binaries GoReleaser has already built; this one
+# compiles from the module proxy instead, because checking out v0.1.0 gets you a
+# tree with neither a Dockerfile nor a dockers_v2 block to build from.
+#
+# The runtime half below is a copy of Dockerfile's on purpose: a Dockerfile
+# cannot include another one, and the alternative — teaching the release
+# Dockerfile to sometimes compile — would put a branch in the path that every
+# real release takes to serve a one-off. Keep the two halves in step.
+
+# --platform=$BUILDPLATFORM pins the compiler to the runner's own architecture
+# and cross-compiles from there. Letting buildx emulate the builder instead
+# would run an arm64 Go toolchain under QEMU, which turns a one-minute compile
+# into a ten-minute one.
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
+
+ARG VERSION
+ARG TARGETOS
+ARG TARGETARCH
+ENV CGO_ENABLED=0
+
+# GOBIN is deliberately not set: `go install` refuses to install a
+# cross-compiled binary when it is, and drops the result in
+# $GOPATH/bin/$GOOS_$GOARCH instead of $GOPATH/bin. The find covers both
+# layouts, since one of the two arches is native on any given runner — and it
+# asks `go env` where GOPATH is rather than assuming, because this image sets it
+# to /go and a bare `golang` image would put it under $HOME.
+#
+# Installing by version rather than from a checkout is also what stamps the
+# version: internal/version reads runtime/debug.ReadBuildInfo, which a module
+# proxy build fills in and a bare `go build` does not.
+RUN mkdir -p /out \
+ && GOOS="$TARGETOS" GOARCH="$TARGETARCH" \
+      go install -ldflags "-s -w" \
+      "github.com/alonshuld/grpctui/cmd/grpctui@${VERSION}" \
+ && find "$(go env GOPATH)/bin" -type f -name grpctui -exec cp {} /out/grpctui \; \
+ && test -x /out/grpctui
+
+FROM alpine:3.22
+
+RUN apk add --no-cache ca-certificates vim nano less
+
+COPY --from=build /out/grpctui /usr/local/bin/grpctui
+
+ENV XDG_CONFIG_HOME=/config \
+    XDG_STATE_HOME=/state \
+    TERM=xterm-256color
+
+RUN mkdir -p /config/grpctui /state/grpctui \
+ && chmod 1777 /config /state /config/grpctui /state/grpctui
+
+VOLUME ["/config", "/state"]
+
+ENTRYPOINT ["/usr/local/bin/grpctui"]

@@ -53,6 +53,20 @@ jobs:
           # failure is, and a silent upstream bump should not turn a green PR red.
           version: v2.12.2
 
+      # arm64 images are built on an amd64 runner, so the arm64 half runs under
+      # emulation; buildx is what dockers_v2 drives.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      # A fork, or this repository before the secret was added, still releases
+      # its binaries — see `disable` in the dockers_v2 block.
+      - name: Docker Hub login
+        if: ${{ secrets.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - name: GoReleaser
         uses: goreleaser/goreleaser-action@v7
         with:
@@ -65,6 +79,9 @@ jobs:
           # When the secret is unset the cask is built and not pushed, so the
           # binaries still ship — see the homebrew_casks block in .goreleaser.yaml.
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          # Read & Write access token on hub.docker.com. Absent, the image is
+          # skipped and the rest of the release is unaffected.
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
           # Checking out a tag leaves the repository on a detached head that
           # `git describe` resolves correctly, but naming the tag outright means
           # a dispatched release cannot quietly build the wrong one. Empty on a

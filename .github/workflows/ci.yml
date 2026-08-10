@@ -64,6 +64,15 @@ jobs:
           # failure is, and a silent upstream bump should not turn a green PR red.
           version: v2.12.2
 
+      # The release config is otherwise only exercised by a tag, and a tag is
+      # immutable — a typo in it costs a version number to fix. `check` parses
+      # the file and every template in it without building anything.
+      - name: GoReleaser config is valid
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          version: "~> v2"
+          args: check
+
   test:
     name: Test (${{ matrix.os }}, go${{ matrix.go }})
     runs-on: ${{ matrix.os }}

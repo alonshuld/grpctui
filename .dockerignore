@@ -1,0 +1,20 @@
+# This applies to Dockerfile.source, whose context is the repository root. The
+# release path is unaffected either way: dockers_v2 builds from a temporary
+# context of its own holding the Dockerfile and the staged binaries, and never
+# reads this file.
+#
+# Excluded by name rather than as a blanket `*`, so that a Dockerfile which
+# later does need something from the tree fails in review instead of at tag
+# time, where the tag has already been cut.
+.git
+.github
+agent
+dist
+docs
+internal
+cmd
+scripts
+
+# Left by `go test -c`; 58MB of context that no image has any use for.
+*.test
+coverage.out
