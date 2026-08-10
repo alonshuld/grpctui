@@ -55,6 +55,11 @@ lint: ## Run golangci-lint
 vet: ## Run go vet
 	$(GO) vet ./...
 
+.PHONY: actionlint
+actionlint: ## Lint .github/workflows (via Docker, so shellcheck runs too)
+	@command -v docker >/dev/null || { echo "docker is required: actionlint runs shellcheck, which a bare go install does not bring"; exit 1; }
+	docker run --rm -v "$(CURDIR):/repo" -w /repo rhysd/actionlint:latest -color
+
 .PHONY: check
 check: ## Everything CI enforces, locally
 	@test -z "$$(gofmt -l . | grep -v '^agent/')" || { gofmt -l . | grep -v '^agent/'; exit 1; }
