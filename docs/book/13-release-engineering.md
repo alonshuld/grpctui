@@ -276,7 +276,7 @@ tag on first fetch — nothing has to be published to it.
 
 ```make
 check:
-	@test -z "$$(gofmt -l . | grep -v '^agent/')" || { ...; exit 1; }
+	@test -z "$$(gofmt -l .)" || { gofmt -l .; exit 1; }
 	$(GO) vet ./...
 	golangci-lint run
 	$(GO) build ./...

@@ -276,7 +276,7 @@ case table[i+1][j] >= table[i][j+1]:   // >= not >
 
 ### The invariant worth pinning
 
-The project instructions single this out:
+There is one property worth asserting directly, ahead of any particular case:
 
 > Every line of both inputs appears exactly once on its own side, or the view
 > has quietly lost part of a response.

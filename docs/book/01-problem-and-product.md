@@ -66,9 +66,10 @@ an *interface* rather than a loadable plugin process.
 
 ## 1.3 The version roadmap as engineering discipline
 
-`description.md` holds a v0.1 → v1.0 roadmap where **each version is
-independently shippable**. That is not documentation theatre; it is the thing
-that kept the codebase coherent, and it is worth saying why.
+Before writing any code I laid out a v0.1 → v1.0 roadmap in which **each version
+is independently shippable** — a real release somebody could use, not a
+checkpoint. That constraint is the thing that kept the codebase coherent, and it
+is worth saying why.
 
 | Version | Theme | The thing it proved |
 |---------|-------|---------------------|
@@ -99,7 +100,8 @@ parameter.
 
 ## 1.4 What "done" looks like
 
-The acceptance criteria for v1.0, from the spec:
+The acceptance criteria I set for v1.0 at the outset — someone should be able
+to:
 
 1. Point at any gRPC service with reflection — zero setup
 2. Explore its full API surface visually, no `.proto` files needed
@@ -114,8 +116,8 @@ fixes, or a new milestone.
 
 ## 1.5 The one standing constraint
 
-Cutting across every version is a single rule, stated in the project
-instructions as a *standing constraint, not a v0.4 detail*:
+Cutting across every version is a single rule, which I wrote down as a
+*standing constraint, not a v0.4 detail*:
 
 > A bearer token, a basic-auth password and a header value never reach the log
 > file, the status bar, the connection switcher, a history file, a collection
