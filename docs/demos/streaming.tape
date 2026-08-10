@@ -16,12 +16,12 @@ Set Height 720
 Set Padding 12
 Set TypingSpeed 50ms
 
-Type "grpctui ${GRPCTUI_DEMO_TARGET:-localhost:50051}"
+Type "grpctui -config '' -history-file '' ${GRPCTUI_DEMO_TARGET:-localhost:50051}"
 Enter
 Sleep 3s
 
 # Watch is the streaming method; the tree tags it «stream.
-Down@300ms 3
+Down@300ms 2
 Sleep 1200ms
 Enter
 Sleep 1500ms
@@ -36,7 +36,7 @@ Escape
 Sleep 800ms
 
 # A stream has no timeout: it stays open, appending as the server speaks.
-Ctrl+s
+Ctrl+S
 Sleep 6s
 
 # esc is what ends a watch.
