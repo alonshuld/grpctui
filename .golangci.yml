@@ -98,9 +98,10 @@ linters:
           - funlen
           - goconst
           - gosec
-      # The bubbletea Update/View switch is a dispatch table; splitting it to
-      # satisfy a complexity budget makes it harder to read, not easier.
-      - path: internal/ui/model\.go
+      # The bubbletea Update switch and the key handler beneath it are dispatch
+      # tables; splitting one to satisfy a complexity budget makes it harder to
+      # read, not easier.
+      - path: internal/ui/update\.go
         linters:
           - gocyclo
 
