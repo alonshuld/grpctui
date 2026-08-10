@@ -46,20 +46,32 @@ jobs:
         env:
           SELECTED: ${{ inputs.tags }}
         run: |
+          # One tag per line from here down, so every expansion below can stay
+          # quoted. Splitting the input on spaces is `tr`'s job rather than the
+          # shell's: relying on word splitting would mean leaving $selected
+          # unquoted everywhere it is used, which is a habit that stops being
+          # harmless the moment one of these strings is not a tag name.
           if [ -n "$SELECTED" ]; then
-            selected="$SELECTED"
+            list=$(printf '%s' "$SELECTED" | tr -s '[:space:]' '\n' | grep -v '^$')
           else
-            selected=$(git tag --sort=v:refname | tr '\n' ' ')
+            list=$(git tag --sort=v:refname)
           fi
 
-          for tag in $selected; do
+          if [ -z "$list" ]; then
+            echo "no tags to build"; exit 1
+          fi
+
+          while IFS= read -r tag; do
             git rev-parse -q --verify "refs/tags/$tag" >/dev/null \
               || { echo "no such tag: $tag"; exit 1; }
-          done
+          done <<< "$list"
 
-          echo "building: $selected"
-          echo "tags=$(printf '%s\n' $selected | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
-          echo "newest=$(printf '%s\n' $selected | sort -V | tail -1)" >> "$GITHUB_OUTPUT"
+          echo "building:"
+          printf '  %s\n' "$list"
+          {
+            echo "tags=$(printf '%s\n' "$list" | jq -R . | jq -sc .)"
+            echo "newest=$(printf '%s\n' "$list" | sort -V | tail -1)"
+          } >> "$GITHUB_OUTPUT"
 
   image:
     name: ${{ matrix.tag }}

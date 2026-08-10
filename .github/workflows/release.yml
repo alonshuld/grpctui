@@ -28,6 +28,13 @@ jobs:
   release:
     name: Release
     runs-on: ubuntu-latest
+    # Hoisted to the job because `secrets` is not one of the contexts a step's
+    # `if:` may read — referencing it there is not a condition that evaluates
+    # false, it is an invalid workflow file, and the whole run fails to start
+    # with no jobs and no logs. `env` is readable from a step's `if:`, so the
+    # skip-without-a-token behaviour goes through this instead.
+    env:
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -61,7 +68,7 @@ jobs:
       # A fork, or this repository before the secret was added, still releases
       # its binaries — see `disable` in the dockers_v2 block.
       - name: Docker Hub login
-        if: ${{ secrets.DOCKERHUB_TOKEN != '' }}
+        if: env.DOCKERHUB_TOKEN != ''
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -79,9 +86,9 @@ jobs:
           # When the secret is unset the cask is built and not pushed, so the
           # binaries still ship — see the homebrew_casks block in .goreleaser.yaml.
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          # Read & Write access token on hub.docker.com. Absent, the image is
+          # DOCKERHUB_TOKEN is not repeated here: it is on the job, because the
+          # login step's `if:` has to be able to read it. Absent, the image is
           # skipped and the rest of the release is unaffected.
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
           # Checking out a tag leaves the repository on a detached head that
           # `git describe` resolves correctly, but naming the tag outright means
           # a dispatched release cannot quietly build the wrong one. Empty on a
