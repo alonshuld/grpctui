@@ -1,0 +1,132 @@
+name: Docker backfill
+
+# Publishes an image for tags that were cut before grpctui shipped a Dockerfile.
+# It is manual and it is deliberately *not* the release workflow: re-running
+# Release against an old tag would re-push the Homebrew cask for that version —
+# whichever run finished last would decide what `brew install grpctui` gives
+# people — and would collide with a GitHub Release that already exists. This job
+# touches Docker Hub and nothing else.
+#
+# Images are built from the module proxy (see Dockerfile.source) rather than
+# from a checkout, because an old tag carries no Dockerfile to build with.
+on:
+  workflow_dispatch:
+    inputs:
+      tags:
+        description: "Space-separated tags to build, e.g. 'v0.1.0 v0.2.0'. Empty means every tag in the repository."
+        required: false
+        type: string
+      latest:
+        description: "Also move the `latest` tag to the newest version built."
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  # The matrix is read from the repository rather than written down here, so a
+  # tag cut after this file was is still covered by a re-run.
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    outputs:
+      tags: ${{ steps.plan.outputs.tags }}
+      newest: ${{ steps.plan.outputs.newest }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - id: plan
+        # The input arrives through the environment rather than through ${{ }}:
+        # expanded into the script, a tag name containing shell metacharacters
+        # would be executed rather than looked up.
+        env:
+          SELECTED: ${{ inputs.tags }}
+        run: |
+          if [ -n "$SELECTED" ]; then
+            selected="$SELECTED"
+          else
+            selected=$(git tag --sort=v:refname | tr '\n' ' ')
+          fi
+
+          for tag in $selected; do
+            git rev-parse -q --verify "refs/tags/$tag" >/dev/null \
+              || { echo "no such tag: $tag"; exit 1; }
+          done
+
+          echo "building: $selected"
+          echo "tags=$(printf '%s\n' $selected | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
+          echo "newest=$(printf '%s\n' $selected | sort -V | tail -1)" >> "$GITHUB_OUTPUT"
+
+  image:
+    name: ${{ matrix.tag }}
+    needs: plan
+    runs-on: ubuntu-latest
+    strategy:
+      # One version failing to compile — an old tag against a dependency that
+      # has since disappeared — should not cost the other thirteen.
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        tag: ${{ fromJSON(needs.plan.outputs.tags) }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # GoReleaser's {{ .Version }} has no leading v, so neither does this — an
+      # image tagged v1.0.2 here and 1.0.3 by the next release would be a mess.
+      - id: version
+        run: echo "value=${TAG#v}" >> "$GITHUB_OUTPUT"
+        env:
+          TAG: ${{ matrix.tag }}
+
+      # `latest` is never pushed here: it is moved once, at the end, after every
+      # version has succeeded. A matrix job pushing it would leave it wherever
+      # the last job to finish happened to land.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.source
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: VERSION=${{ matrix.tag }}
+          tags: alonshuld/grpctui:${{ steps.version.outputs.value }}
+          labels: |
+            org.opencontainers.image.title=grpctui
+            org.opencontainers.image.description=A terminal UI for exploring, calling, and debugging gRPC services
+            org.opencontainers.image.source=https://github.com/alonshuld/grpctui
+            org.opencontainers.image.version=${{ steps.version.outputs.value }}
+            org.opencontainers.image.licenses=MIT
+
+  latest:
+    name: Move latest
+    needs: [plan, image]
+    if: ${{ inputs.latest }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # imagetools retags the manifest that is already published rather than
+      # rebuilding it, so `latest` and the version it names are the same digest.
+      - run: |
+          version="${NEWEST#v}"
+          docker buildx imagetools create \
+            -t alonshuld/grpctui:latest \
+            "alonshuld/grpctui:$version"
+        env:
+          NEWEST: ${{ needs.plan.outputs.newest }}

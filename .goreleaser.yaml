@@ -8,6 +8,7 @@ project_name: grpctui
 # token" into "no release".
 env:
   - HOMEBREW_TAP_TOKEN={{ if index .Env "HOMEBREW_TAP_TOKEN" }}{{ .Env.HOMEBREW_TAP_TOKEN }}{{ end }}
+  - DOCKERHUB_TOKEN={{ if index .Env "DOCKERHUB_TOKEN" }}{{ .Env.DOCKERHUB_TOKEN }}{{ end }}
 
 before:
   hooks:
@@ -93,6 +94,40 @@ homebrew_casks:
           if OS.mac?
             system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/grpctui"]
           end
+
+# The image is published to Docker Hub as alonshuld/grpctui — docker.io is the
+# default registry, so the name carries no host. It packages the same binaries
+# the archives do rather than compiling its own, which is what keeps `docker run`
+# and the tarball byte-identical.
+#
+# Like the cask, this needs a credential the repository does not have by default:
+# DOCKERHUB_TOKEN is a Read & Write access token. Unlike the cask, GoReleaser has
+# no build-but-do-not-push switch here, so `disable` skips the image outright
+# when the token is absent and the binaries still ship. A snapshot is exempt —
+# `make snapshot` builds the image locally and pushes nothing, which is the only
+# way to exercise the Dockerfile before a tag.
+dockers_v2:
+  - id: grpctui
+    images:
+      - alonshuld/grpctui
+    tags:
+      - "{{ .Version }}"
+      # A prerelease is not what `docker pull alonshuld/grpctui` should give you,
+      # for the same reason it is not what `brew install` gives you. An empty tag
+      # is skipped rather than pushed as "".
+      - "{{ if not .Prerelease }}latest{{ end }}"
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    dockerfile: Dockerfile
+    disable: '{{ if .IsSnapshot }}false{{ else if .Env.DOCKERHUB_TOKEN }}false{{ else }}true{{ end }}'
+    labels:
+      org.opencontainers.image.title: grpctui
+      org.opencontainers.image.description: A terminal UI for exploring, calling, and debugging gRPC services
+      org.opencontainers.image.source: https://github.com/alonshuld/grpctui
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.licenses: MIT
 
 changelog:
   use: github
