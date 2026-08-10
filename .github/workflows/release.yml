@@ -81,11 +81,6 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # The Homebrew tap is a different repository, which GITHUB_TOKEN is not
-          # scoped to. This is a PAT with contents:write on alonshuld/homebrew-tap.
-          # When the secret is unset the cask is built and not pushed, so the
-          # binaries still ship — see the homebrew_casks block in .goreleaser.yaml.
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           # DOCKERHUB_TOKEN is not repeated here: it is on the job, because the
           # login step's `if:` has to be able to read it. Absent, the image is
           # skipped and the rest of the release is unaffected.

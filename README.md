@@ -36,11 +36,7 @@ Prebuilt binaries for Linux, macOS, and Windows are attached to each
 static binary with no runtime dependencies, so unpacking one onto `$PATH` is the
 second route.
 
-Every release also builds a Homebrew cask for macOS and Linux and publishes it
-to `alonshuld/homebrew-tap`, so once that tap is up,
-`brew install alonshuld/tap/grpctui` is the third route.
-
-The fourth is Docker — `alonshuld/grpctui`, `linux/amd64` and `linux/arm64`,
+The third is Docker — `alonshuld/grpctui`, `linux/amd64` and `linux/arm64`,
 tagged with each version and `latest`:
 
 ```bash

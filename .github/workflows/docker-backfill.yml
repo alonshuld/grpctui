@@ -2,9 +2,8 @@ name: Docker backfill
 
 # Publishes an image for tags that were cut before grpctui shipped a Dockerfile.
 # It is manual and it is deliberately *not* the release workflow: re-running
-# Release against an old tag would re-push the Homebrew cask for that version —
-# whichever run finished last would decide what `brew install grpctui` gives
-# people — and would collide with a GitHub Release that already exists. This job
+# Release against an old tag would collide with a GitHub Release that already
+# exists, and would re-publish that version's archives and checksums. This job
 # touches Docker Hub and nothing else.
 #
 # Images are built from the module proxy (see Dockerfile.source) rather than
