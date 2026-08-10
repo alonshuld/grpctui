@@ -35,8 +35,9 @@ under state because it is machine-managed.
 
 ## 7.2 Two syntaxes, deliberately distinct
 
-This is one of the sharper design decisions in the project and a very good
-interview answer.
+Having two templating syntaxes in one program looks like an accident. It is not
+— they solve opposite problems, and collapsing them into one was the first thing
+I tried and the first thing I undid.
 
 | Syntax | Resolved | From | Purpose |
 |---|---|---|---|
@@ -330,7 +331,7 @@ a nonsense version in it wants an editor.*
 
 ### The non-obvious part: *when* the check runs
 
-This is the best detail in the package and worth memorising.
+This is the part that took a second attempt.
 
 Both readers decode with `KnownFields(true)`. **A file from a later grpctui is
 made of keys this one has never heard of.** So the strict decode would fail on

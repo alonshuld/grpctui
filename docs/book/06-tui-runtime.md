@@ -84,7 +84,8 @@ suppression in the repo names its linter and gives a reason.
 ## 6.3 The tea.Cmd closure discipline
 
 This is the rule that makes the concurrency safe, and it is worth stating
-precisely because it is the thing an interviewer can push hardest on.
+precisely, because breaking it produces a race the race detector will find only
+if the timing happens to line up in CI.
 
 **A `tea.Cmd` runs on its own goroutine. Reading the model from inside one is a
 data race.** So every command *captures values before it is returned*:
@@ -154,7 +155,7 @@ precisely so that capturing them is safe.
    └─ m.remember(method, body)   ← for the next diff
 ```
 
-Four things in that flow are worth being able to justify:
+Four things in that flow were not obvious to me until I had them wrong once:
 
 **Rendering happens in the command, not in `Update`.** `Marshal`, `Wire` and
 `annotate` all run off the Update goroutine *so that the panel receives text and
@@ -227,7 +228,7 @@ if msg.seq != m.connSeq {
 
 ## 6.6 Streaming: a chain of commands, not a loop
 
-The hardest part of the UI, and the best interview material in the package.
+The hardest part of the UI, and the one that took the most attempts.
 
 **The problem.** A `Recv` on an open stream blocks until the server speaks —
 which may be an hour. A loop reading a stream cannot live in `Update`, and a
@@ -477,8 +478,8 @@ responses map[string]string   // last body per method, for the diff view
 
 Eviction is *arbitrary* (map order), and the comment defends that: *every entry
 is equally a convenience, and choosing properly would mean keeping an access
-order for a cache of two dozen strings.* Knowing when **not** to build an LRU is
-a signal.
+order for a cache of two dozen strings.* I started writing an LRU here and threw
+it away; the eviction policy is not what this cache is for.
 
 ```go
 const maxStreamEntries = 500   // in the response panel
@@ -536,6 +537,6 @@ duration:**
 > Never assert a duration; a shared CI runner makes that a coin toss, and it is
 > the reason a bufconn timing assertion was deleted once already.
 
-That last sentence is a genuine war story and a good thing to have ready: the
-project *did* once assert that a bufconn call took measurable time, it *did*
-flake, and commit `73c8c8f` removed it.
+That last sentence is not hypothetical. The suite *did* once assert that a
+bufconn call took measurable time, it *did* flake on a loaded runner, and commit
+`73c8c8f` removed it. The rule came out of that.

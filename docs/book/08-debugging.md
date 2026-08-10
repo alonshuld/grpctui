@@ -137,8 +137,8 @@ func (p *Proxy) emit(event Event) {
 
 **The one thing a passive proxy may never do is slow down the traffic it is
 watching.** A 256-event buffer, an `atomic.Int64` of what was dropped, and the
-panel says how many were lost. Being able to articulate "I chose lossy over
-lossless, here is why" is a stronger answer than an unbounded queue.
+panel says how many were lost. I chose lossy over lossless deliberately: an
+unbounded queue would have made the tool distort the thing it is measuring.
 
 Messages are also truncated at `MaxPayload = 64 << 10` for the *log* — *the call
 itself is forwarded whole regardless; only what the log keeps is cut* — because

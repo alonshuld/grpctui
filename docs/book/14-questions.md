@@ -1,11 +1,13 @@
-# Chapter 14 — Interview Drill
+# Chapter 14 — The Questions I Get Asked
 
-Questions, ranked roughly by how likely they are to come up, with answers
-compressed to what you would actually say out loud.
+Everything in the previous thirteen chapters, restated as answers. Some of these
+are questions people have actually put to me about grpctui; the rest are ones I
+had to answer for myself before the code could be written. They are grouped by
+subject, and each answer is compressed to roughly what I would say out loud.
 
 ---
 
-## Tier 1 — You will almost certainly be asked these
+## The first five minutes
 
 **Q. Give me the elevator pitch.**
 
@@ -86,7 +88,7 @@ isolation.
 
 ---
 
-## Tier 2 — Design decisions they will probe
+## Design decisions
 
 **Q. Why does `Dial` not take a context?**
 
@@ -184,7 +186,7 @@ viewport, not a patch anyone could apply.
 
 ---
 
-## Tier 3 — Go-specific and depth questions
+## Go questions
 
 **Q. Functional options: why, and what do they cost?**
 
@@ -288,7 +290,7 @@ panic on — and it runs once per send.
 
 ---
 
-## Tier 4 — Protocol and protobuf depth
+## Protocol and protobuf
 
 **Q. What is gRPC server reflection, mechanically?**
 
@@ -371,7 +373,7 @@ panel says so rather than pretending to be a packet capture.
 
 ---
 
-## Tier 5 — Security, testing, and process
+## Security, testing and process
 
 **Q. Walk me through your credentials handling.**
 
@@ -478,25 +480,27 @@ invisible to the build, the linters and the whole test matrix.
 
 ---
 
-## The five things to have on the tip of your tongue
+## The five I answer most often
 
-1. **The layering rule and what it bought.** "The UI never imports grpc, the
-   transport never imports bubbletea — that's why the transport is at 98.9%
-   without a terminal and the UI is testable without a server."
+If the whole project had to reduce to five sentences, these are the five.
 
-2. **Dynamic invocation in one sentence.** "Descriptor from reflection,
-   `dynamicpb.NewMessage`, `ClientConnInterface.Invoke` with the method path —
-   generated stubs are that plus type safety."
+1. **The layering rule, and what it bought.** The UI never imports grpc and the
+   transport never imports bubbletea — which is why the transport sits at 98.9%
+   without a terminal and the UI is testable without a server.
 
-3. **The streaming command chain.** "Each receive is a command that blocks on its
+2. **Dynamic invocation.** A descriptor from reflection,
+   `dynamicpb.NewMessage`, and `ClientConnInterface.Invoke` with the method
+   path. Generated stubs are that, plus type safety.
+
+3. **The streaming command chain.** Each receive is a command that blocks on its
    own goroutine and issues the next one from its handler, so `Update` is never
-   blocked on a server that's gone quiet."
+   blocked on a server that has gone quiet.
 
-4. **The credentials rule as a progression.** "Every version added a surface that
+4. **The credentials rule as a progression.** Every version added a surface that
    outlives the call, and each one had to re-establish the same invariant —
-   enforced structurally where possible: `Headers []string` is a type that can't
-   hold a value."
+   enforced structurally wherever I could manage it, so `Headers []string` is a
+   type that cannot hold a value.
 
-5. **Scale is tested by shape, not stopwatch.** "A frame costs a screenful, not a
-   schema, and `AllocsPerRun` at two sizes pins that deterministically where a
-   duration on a shared runner is a coin toss."
+5. **Scale is tested by shape, not by stopwatch.** A frame costs a screenful
+   rather than a schema, and `AllocsPerRun` at two sizes pins that
+   deterministically where a duration on a shared runner is a coin toss.

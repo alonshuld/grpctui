@@ -245,8 +245,8 @@ if err != nil {
 ```
 
 The rule that emerges: **an error in the thing the user asked for is reported;
-an error in the bookkeeping around it is logged.** Being able to state that as a
-policy, rather than defending each `_` individually, is the strong answer.
+an error in the bookkeeping around it is logged.** Having that as a policy is
+what stops each `_` from being an argument of its own.
 
 `nilerr` and `errcheck` (with `check-type-assertions: true`) are both enabled, so
 every one of these is a deliberate, reviewed choice rather than an oversight.

@@ -1,7 +1,8 @@
 # Chapter 3 — The Dependency Stack
 
-Every direct dependency, why it is there, what was considered instead, and what
-it costs. This chapter is the one most likely to be quizzed line-by-line.
+Every direct dependency, why it is there, what I considered instead, and what it
+costs. A dependency is a decision you keep paying for, so each of these has an
+argument behind it.
 
 ## 3.1 The manifest
 
@@ -67,8 +68,8 @@ and dial becomes a `tea.Cmd`, which means every async result needs a message
 type and a handler — `internal/ui/msgs.go` exists solely for that. It also means
 you cannot thread a `context.Context` through `Update`, which is why the root
 model holds one as a field with an explicit `//nolint:containedctx` and a
-justification. Being able to name that as a *known cost with a documented
-workaround* is the mark of having thought about it.
+justification. It is a real cost of the framework, and I would rather record it
+as one than pretend the pattern is free.
 
 ### `charmbracelet/bubbles` — the components
 
@@ -157,7 +158,8 @@ The heart of the tool. Four sub-packages carry the weight:
 - **`encoding/protowire`** — low-level tag/varint/length-delimited parsing, used
   by `WireFields` to decode bytes **without a descriptor**.
 
-Two non-obvious usages worth being able to explain:
+Two non-obvious usages, both of which cost me an afternoon before I understood
+them:
 
 **protojson's whitespace is deliberately randomised.** The amount of space after
 a key varies between builds of the same program, to discourage anyone treating
@@ -233,9 +235,8 @@ a/c.proto` working when they import each other.
 **Why zap over `log/slog`:** the project predates a settled slog handler
 ecosystem and wanted a zero-allocation structured logger with a mature
 `zaptest/observer` for asserting on log records in tests. slog would be a
-defensible choice today; the honest interview answer is "zap for the observer
-and the maturity, and I would consider slog now that the ecosystem has caught
-up".
+defensible choice today, and if I were starting now I would look at it again —
+zap won on the observer and on maturity, not on anything structural.
 
 **The non-negotiable constraint:** a TUI owns the terminal, so *the logger must
 never write to stdout or stderr*. Anything written while bubbletea holds the
@@ -310,5 +311,6 @@ that the mock was called.*
 | An ORM / database | State is three YAML files. |
 | `sync/errgroup` | The only multi-goroutine site is the proxy's two pumps, which needs asymmetric error handling (the response half is authoritative), not `errgroup`'s first-error semantics. |
 
-Being able to list what you *did not* add, with a reason each, is generally a
-stronger signal than listing what you did.
+Most of these were considered and rejected rather than never thought about,
+which is why they are listed. A dependency you never evaluated is a decision you
+have not made yet.

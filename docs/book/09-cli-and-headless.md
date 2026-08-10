@@ -96,8 +96,8 @@ if err.Error() == missingTarget {
 > help page would only be in the way of it.
 
 That distinction — *the user has not told me something* versus *the user told me
-something wrong* — is the right way to decide between exit 2 and exit 1, and it
-is worth being able to state as a rule.
+something wrong* — is the rule I settled on for choosing between exit 2 and exit
+1, and it decides every case in the program.
 
 `options.usage` is stored as a field for a reason worth noting: *the target may
 come from the config file, so whether one is missing is only known after the
@@ -377,8 +377,10 @@ Action names are **derived from the struct's field names** by reflection —
 > surface; `keymap_test.go` pins the whole list so that such a rename fails a
 > test rather than a user's config file.
 
-That is the trade-off stated in full: a real cost, a named risk, and a
-mitigation. Exactly the shape of answer an interviewer wants.
+I went back and forth on this one. A table is explicit and a reflected name is
+not; but the table is a second place to remember, and forgetting it fails
+silently. The reflection wins on the failure mode, and the test buys back the
+explicitness.
 
 **Nothing is applied unless everything can be:**
 

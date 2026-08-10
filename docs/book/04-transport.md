@@ -227,9 +227,10 @@ ctx, cancel := context.WithCancel(ctx)
 ```
 
 A unary call gets `DefaultCallTimeout` (60s). A stream gets none. `esc` ends
-one, and nothing else does. This is the kind of asymmetry an interviewer will
-probe — the answer is that a timeout on a watch stream would mean the tool
-deciding when a watch has gone on long enough.
+one, and nothing else does. The asymmetry looks like an oversight until you try
+the alternative: a timeout on a watch stream means the tool deciding when a
+watch has gone on long enough, which is not a decision it is in any position to
+make.
 
 ### Locking discipline
 
@@ -320,9 +321,9 @@ cfg.RootCAs = pool
 
 The reasoning is stated in the code: *naming a CA is how a user says "this
 server is signed by this authority and no other", and quietly accepting every
-public root as well would turn a pinned connection into an ordinary one.* This
-is a security decision with a one-line implementation and a paragraph of
-justification — exactly the shape an interviewer wants to hear.
+public root as well would turn a pinned connection into an ordinary one.* One
+line of implementation, a paragraph of justification — which is the usual ratio
+for the security decisions in this codebase.
 
 `MinVersion: tls.VersionTLS12` is set explicitly. `InsecureSkipVerify` carries a
 `#nosec G402` with a written justification and *the status bar says so while it

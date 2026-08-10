@@ -109,10 +109,10 @@ lipgloss's global renderer, so they cannot run in parallel.*
   # satisfy a complexity budget makes it harder to read, not easier
 ```
 
-The second is the better answer than either raising `gocyclo` globally or
-splitting `Update` into artificial helpers. It is scoped to one file, and it
-states *why the metric is wrong here* rather than that the metric is
-inconvenient.
+The second is what I settled on after trying both alternatives — raising
+`gocyclo` globally, and splitting `Update` into artificial helpers. Neither was
+better. This is scoped to one file, and it states *why the metric is wrong
+here* rather than that the metric is inconvenient.
 
 ## 13.3 Versioning and release policy
 
@@ -187,8 +187,9 @@ func Version() string {
 > every such build report "dev".
 
 Build info **wins**; ldflags fill in for builds that have neither (a local `go
-build`, which reports `(devel)` and falls through to `"dev"`). This is a
-classic mistake and getting the precedence right is a good detail to have ready.
+build`, which reports `(devel)` and falls through to `"dev"`). I had this the
+wrong way round first, and it is invisible until somebody installs from source
+and reports the version as "dev".
 
 ### Homebrew: a cask, not a formula
 

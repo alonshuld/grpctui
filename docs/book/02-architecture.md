@@ -29,10 +29,10 @@ design decision downstream.
    `Code uint32`, `Name string`, `Message string`. The response panel renders a
    code distinctly from a transport failure without importing grpc.
 
-**How it is enforced:** by discipline and code review, not by a linter rule.
-That is a legitimate interview answer, and the honest follow-up is: *it could be
-enforced mechanically with `depguard` in `.golangci.yml`, and in a larger team
-it should be.* The reason it holds here is that the boundary types
+**How it is enforced:** by discipline, not by a linter rule — which is the
+weakest part of the arrangement, and I know it. It could be enforced
+mechanically with `depguard` in `.golangci.yml`, and on a team it should be. The
+reason it has held here is that the boundary types
 (`CallStatus`, `Timing`, `proxy.Event`) are designed so that importing grpc from
 the UI would not even be convenient.
 
@@ -151,7 +151,7 @@ type Renderer interface {
 
 The roadmap asked for "plugin/extension points for custom response renderers".
 The implementation is deliberately **not a plugin process**, and the reasoning
-is worth quoting in an interview: *loading foreign code into a terminal client
+is the whole argument: *loading foreign code into a terminal client
 that holds bearer tokens is a bad trade, and Go has no stable plugin story on
 the platforms grpctui ships to.* What is offered instead is the seam — an
 interface, a registry that is a value, and a few lines to add one. The built-ins
@@ -199,7 +199,8 @@ race in the general case and a correctness bug in every case.
 a *mutable* tree. Copying a `Form` shares the tree rather than duplicating it,
 because the panel holding one is copied on every keystroke and "a form that
 forgot what had been typed into it each keystroke would be no form at all".
-Being able to name the exception and justify it is worth more than the rule.
+The exception is more instructive than the rule: the rule exists to prevent a
+race, and where there is no race there is no reason to pay for it.
 
 ### The command pattern (Elm architecture)
 
@@ -238,7 +239,7 @@ of each*. This is the strongest anti-duplication argument in the codebase.
 
 ## 2.5 Why not clean architecture / hexagonal / DDD?
 
-An interviewer may ask this. The answer:
+Worth addressing head-on, because the layering invites the comparison.
 
 The four layers *are* a ports-and-adapters arrangement — `ui.Client` is a port,
 `grpcclient.Client` is the adapter, `Stream` is a port with a real and a fake

@@ -16,7 +16,7 @@ Nobody had built the `lazygit` of gRPC: a full-screen, keyboard-driven,
 terminal-native client that is as good at **debugging a misbehaving service** as
 it is at calling a healthy one. That is the gap grpctui fills.
 
-The analogy is deliberate and worth being able to state in an interview:
+The analogy is deliberate and it is the one I kept coming back to:
 `lazygit` did not add a feature `git` lacked; it made the workflow you already
 had *fast* by making state visible and every action one keystroke away. grpctui
 does the same thing to `grpcurl`.
@@ -68,7 +68,7 @@ an *interface* rather than a loadable plugin process.
 
 `description.md` holds a v0.1 → v1.0 roadmap where **each version is
 independently shippable**. That is not documentation theatre; it is the thing
-that kept the codebase coherent, and it is worth being able to explain why.
+that kept the codebase coherent, and it is worth saying why.
 
 | Version | Theme | The thing it proved |
 |---------|-------|---------------------|
@@ -83,7 +83,7 @@ that kept the codebase coherent, and it is worth being able to explain why.
 | v0.9 | Polish & extensibility | Themes, `.proto` fallback, remapping, completions, headless, renderers |
 | v1.0 | Stable | Versioned formats, 98.9% transport coverage, Homebrew, generated key reference, large-schema benchmarks |
 
-Two properties of this ordering matter in an interview:
+Two properties of that ordering did most of the work:
 
 **It is ordered by architectural risk, not by user visibility.** v0.3 (the field
 tree) comes before v0.4 (auth) because the field tree is the thing that decides
@@ -122,9 +122,11 @@ instructions as a *standing constraint, not a v0.4 detail*:
 > file, an exported command, or a CI log — only their *kind* and header *names*
 > do.
 
-Chapter 10 is entirely about how that is enforced. It is the single most
-interview-friendly thing in the codebase, because it is a constraint that had to
-be re-established on *every new surface* — and each version added a surface:
-v0.6 added files, v0.7 added variable expansion, v0.8 added an exported command,
-v0.9 added a CI log. Being able to narrate that progression demonstrates that
-you think about security as a property of a system rather than as a feature.
+Chapter 10 is entirely about how that is enforced, and it is the part of the
+project I am most pleased with — not because the rule is clever, but because it
+had to be re-established on *every new surface*, and each version added one.
+v0.6 added files that outlive the session. v0.7 made it possible for a request
+*body* to hold a token. v0.8 added an exported command written to be pasted
+elsewhere. v0.9 added a CI log. Writing the rule down once in v0.4 was the easy
+part; keeping it true five versions later is what made it a property of the
+system rather than a feature of one release.

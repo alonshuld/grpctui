@@ -1,8 +1,9 @@
 # Chapter 10 — The Credentials Rule
 
-If you take one thing into an interview from this codebase, take this chapter.
-It is a single security invariant, stated once, enforced on eleven different
-surfaces, and re-established every time a version added a new one.
+This is the constraint I wrote down before v0.4 shipped and then spent five
+versions keeping true. One security invariant, stated once, enforced on eleven
+different surfaces — and every version that added a surface had to earn it
+again.
 
 ## 10.1 The rule
 
@@ -194,8 +195,8 @@ and `-V token=hunter2` would otherwise land in a usage message.
 
 ## 10.3 Where credentials *are* allowed to live
 
-Being able to say where the secret actually is, and why that is acceptable,
-matters as much as the list of places it is not.
+Saying where the secret actually *is*, and why that is acceptable, matters as
+much as the list of places it is not.
 
 1. **In the process, in `grpcclient.Auth`**, attached to the connection via
    `PerRPCCredentials`. It must be there — it is going on the wire.
@@ -260,26 +261,35 @@ The diff cache is never persisted. Neither is the traffic log. A response from
 a `GetUser` call is somebody's personal data, and a debugging tool that
 accumulated those on disk would be a liability.
 
-## 10.6 How to talk about this in an interview
+## 10.6 The shape of the whole thing
 
-The strongest framing is the **progression**, because it shows the constraint
-being *maintained* rather than merely *stated*:
+Read as a progression, this is the part of the project I would point at if
+somebody asked what "maintaining a constraint" means in practice.
 
-> v0.4 introduced credentials, and the rule was: they never reach the log or the
-> status bar. v0.6 added files that outlive the session, so `Request.Headers`
-> became `[]string` — a type that cannot hold a value. v0.7 added variable
-> expansion, which meant a request *body* could now contain a token, so records
-> keep the `{{reference}}` and never its expansion — that is why
-> `Form.Template` exists at all. v0.8 added an exported command, the most
-> outward-facing surface there is, so that exports placeholders and names the
-> credential's kind. v0.9 added a CI log, which is the most *durable* surface
-> there is, so that withholds even header names. Each version added a surface,
-> and each one had to re-establish the same invariant on it.
+v0.4 introduced credentials, and the rule was simple: they never reach the log
+or the status bar. That was easy, because there were only two surfaces.
 
-Then the closer:
+v0.6 added files that outlive the session, and the rule stopped being a
+discipline and became a *type*: `Request.Headers` is `[]string`, so a record
+cannot hold a value even by accident.
 
-> The enforcement is mostly *structural* rather than procedural. `Request.Headers`
-> is `[]string`. `Auth` has a `Describe()` and no `String()`. `Metadata.Keys()`
-> exists so that "record a call" and "make a call" use different accessors. Where
-> that was not possible, there is a test — every test that writes a record asserts
-> no value reached the file.
+v0.7 was the version where it got genuinely hard. Variable expansion meant a
+request *body* could now contain a token — captured out of a login response,
+which is the canonical case. That is the reason `Form.Template` exists at all: a
+saved request had to keep the `{{reference}}` and never its expansion, and
+protobuf's JSON mapping cannot hold `"{{id}}"` in an int64 field, which is why
+there is a `Values` map beside the body.
+
+v0.8 added the most *outward-facing* surface in the program — a command written
+to be pasted somewhere else — so it exports placeholders and names the
+credential's kind rather than the credential.
+
+v0.9 added the most *durable* one, a CI log, so that withholds even header
+names, which is stricter than anywhere else in the program.
+
+The thing I would want noticed is that the enforcement is mostly **structural
+rather than procedural**. `Request.Headers` is `[]string`. `Auth` has a
+`Describe()` and deliberately no `String()`, so `%v` cannot leak it.
+`Metadata.Keys()` exists so that "record a call" and "make a call" use different
+accessors. Where I could not make the mistake unrepresentable, there is a test
+instead — every test that writes a record asserts no value reached the file.

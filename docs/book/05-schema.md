@@ -88,8 +88,8 @@ and a tree cannot end up half resolved*.
 
 ## 5.2 The three flavours of "empty"
 
-This is the subtlest part of the package and the thing most likely to be probed,
-because it is where protobuf semantics and UI semantics meet.
+This is the subtlest part of the package, and the part I rewrote most often. It
+is where protobuf semantics and UI semantics meet, and they do not agree.
 
 Protobuf's problem: for an ordinary proto3 scalar, *"set to the zero value"* and
 *"not set"* are indistinguishable on the wire. So a form must decide what an
@@ -421,8 +421,9 @@ changed). The panel labels it *"as re-encoded"* rather than pretending
 otherwise. A server that wrote its fields out of order, or used a non-minimal
 varint, will differ here in layout while meaning exactly the same thing.
 
-Being honest about this limitation — in a doc comment *and* on screen — is a
-better answer than a capture that quietly lies.
+Saying so — in a doc comment *and* on screen — was the only option I could live
+with. A view that silently claimed to be a packet capture would be worse than no
+view at all, in a tool whose whole pitch is reading the wire.
 
 ### `WireFields` is deliberately schema-free
 

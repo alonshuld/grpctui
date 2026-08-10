@@ -70,8 +70,8 @@ coverage drops, whereas failure cases scattered across five files are invisible.
 2. `attach`'s binary decode is unreachable because `ValidateHeader` checks the
    same thing first — *belt to that braces*.
 
-Being able to say "these two lines are unreachable and here is why, and I chose
-not to contort the code to reach them" is a better answer than 100% coverage.
+I would rather have two unreachable lines with a written reason than a contorted
+API that exists to make a coverage number round up.
 
 ## 12.3 teatest and golden files
 
@@ -236,9 +236,10 @@ The tests that pin the *invariants* rather than the features:
 //   rather than a number counted by hand
 ```
 
-These are the tests that would catch a regression a feature test would sail past.
-Being able to point at "I have a test for the *rule*, not only for the code that
-happens to follow it" is a strong signal.
+These are the tests that catch a regression a feature test would sail past. The
+distinction I care about is testing the *rule* rather than only the code that
+currently happens to follow it — a refactor that moves the code should still
+fail if it breaks the rule.
 
 ## 12.8 Fixtures and fakes
 
