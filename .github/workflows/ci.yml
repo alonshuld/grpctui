@@ -73,6 +73,16 @@ jobs:
           version: "~> v2"
           args: check
 
+      # The workflows themselves were the one thing nothing validated, and an
+      # invalid one does not fail a step — it fails the whole run before any job
+      # starts, with no logs to read. That is how a `secrets` reference in a
+      # step's `if:` reached main: every gate here passed, because none of them
+      # read .github/workflows at all.
+      - name: actionlint
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+          "$(go env GOPATH)/bin/actionlint"
+
   test:
     name: Test (${{ matrix.os }}, go${{ matrix.go }})
     runs-on: ${{ matrix.os }}
