@@ -7,6 +7,8 @@ browser tab.
 Point it at a gRPC server with reflection enabled and it discovers the entire
 API surface with zero configuration.
 
+![Discovering a server, filling in the generated form, and reading the response](docs/demos/unary.gif)
+
 > **Status: v1.0 — Stable.** Discover a server, fill in a request form
 > generated from the method's input message — nested messages, repeated fields,
 > maps, `oneof` variants and enums included — send the headers a real service
@@ -75,6 +77,20 @@ docker run --rm --network host \
 ```
 
 Then `grpctui <host:port>`, and press `?` for the keys.
+
+## Try it without a server
+
+If you have not got a gRPC server to hand, the repository carries one:
+
+```bash
+go run ./cmd/demoserver &          # a made-up API on localhost:50051
+go run ./cmd/grpctui localhost:50051
+```
+
+It serves three small services with all four call shapes between them, plus the
+health service, with reflection switched on — which is exactly what the demos
+above were recorded against. Its replies are canned; everything else about it is
+a real server.
 
 ## Usage
 
@@ -631,19 +647,24 @@ their meaning.
 ## Demos
 
 [docs/demos](docs/demos) holds three [VHS](https://github.com/charmbracelet/vhs)
-tapes, one per workflow worth seeing before you try it:
+tapes, one per workflow worth seeing before you try it. Each records a real
+grpctui against [cmd/demoserver](cmd/demoserver) rather than a script, so a demo
+that goes stale is regenerated rather than restaged — `make demos` redraws all
+three. See [docs/demos/README.md](docs/demos/README.md) for what recording them
+needs.
 
-| Tape | What it records |
-| --- | --- |
-| `unary.tape` | Discovery with nothing configured, a generated form, a response |
-| `streaming.tape` | A server-streaming call arriving live, and `esc` ending the watch |
-| `collections.tape` | Saving a request, finding it in the browser, replaying it |
+The first is at the top of this page: discovery with nothing configured, a form
+generated from the method's input message, and the response with its status and
+its timing breakdown.
 
-`make demos` records all three as GIFs, against a real server rather than a
-script — so a demo that goes stale is regenerated rather than restaged. The
-recordings are not committed: they are megabytes that go out of date every
-release, and the tape they come from is four lines to read and always current.
-See [docs/demos/README.md](docs/demos/README.md) for what recording them needs.
+A server-streaming call arriving live, and `esc` ending the watch:
+
+![A server-streaming call arriving live](docs/demos/streaming.gif)
+
+Saving a request under a name, finding it again in the browser, and replaying
+it:
+
+![Saving a request, searching for it, and replaying it](docs/demos/collections.gif)
 
 ## Documentation
 

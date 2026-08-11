@@ -1,0 +1,150 @@
+// The API the demo server serves. It exists to be looked at: every shape
+// grpctui draws differently appears at least once — a nested message, an enum,
+// a repeated field, a map, a oneof and a well-known type — so a recording of
+// the request form shows the form doing its job rather than one string field.
+syntax = "proto3";
+
+package demo.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// Users of the demo store.
+service UserService {
+  // Fetch one user by id.
+  rpc GetUser(GetUserRequest) returns (User);
+  // Create a user. The interesting one to look at: the request is a tree.
+  rpc CreateUser(CreateUserRequest) returns (User);
+  // Every user, one message at a time.
+  rpc ListUsers(ListUsersRequest) returns (stream User);
+}
+
+// Orders placed against the demo store.
+service OrderService {
+  // Fetch one order by id.
+  rpc GetOrder(GetOrderRequest) returns (Order);
+  // Watch orders change as they move through the store.
+  rpc WatchOrders(WatchOrdersRequest) returns (stream OrderEvent);
+  // Upload a batch of orders and get one summary back.
+  rpc ImportOrders(stream Order) returns (ImportSummary);
+  // Follow a shipment: pings go up, updates come down.
+  rpc TrackShipment(stream ShipmentPing) returns (stream ShipmentUpdate);
+}
+
+// What the demo store has on the shelf.
+service InventoryService {
+  // Stock for one SKU.
+  rpc GetStock(GetStockRequest) returns (StockLevel);
+}
+
+enum Role {
+  ROLE_UNSPECIFIED = 0;
+  ROLE_MEMBER = 1;
+  ROLE_ADMIN = 2;
+}
+
+message Address {
+  string line1 = 1;
+  string city = 2;
+  string country = 3;
+  string postcode = 4;
+}
+
+message User {
+  string id = 1;
+  string email = 2;
+  string display_name = 3;
+  Role role = 4;
+  repeated string teams = 5;
+  Address address = 6;
+  map<string, string> labels = 7;
+  google.protobuf.Timestamp created_at = 8;
+}
+
+message GetUserRequest {
+  string user_id = 1;
+}
+
+message CreateUserRequest {
+  string email = 1;
+  string display_name = 2;
+  Role role = 3;
+  repeated string teams = 4;
+  Address address = 5;
+  map<string, string> labels = 6;
+}
+
+message ListUsersRequest {
+  int32 page_size = 1;
+  Role role = 2;
+}
+
+enum OrderState {
+  ORDER_STATE_UNSPECIFIED = 0;
+  ORDER_STATE_PLACED = 1;
+  ORDER_STATE_PICKED = 2;
+  ORDER_STATE_SHIPPED = 3;
+  ORDER_STATE_DELIVERED = 4;
+}
+
+message LineItem {
+  string sku = 1;
+  int32 quantity = 2;
+  int64 unit_price_cents = 3;
+}
+
+message Order {
+  string id = 1;
+  string user_id = 2;
+  OrderState state = 3;
+  repeated LineItem items = 4;
+  int64 total_cents = 5;
+  google.protobuf.Timestamp placed_at = 6;
+}
+
+message GetOrderRequest {
+  string order_id = 1;
+}
+
+message WatchOrdersRequest {
+  // Watch one user's orders, or one state's, or leave both unset for all.
+  oneof scope {
+    string user_id = 1;
+    OrderState state = 2;
+  }
+}
+
+message OrderEvent {
+  Order order = 1;
+  OrderState from = 2;
+  OrderState to = 3;
+  google.protobuf.Timestamp at = 4;
+}
+
+message ImportSummary {
+  int32 accepted = 1;
+  int32 rejected = 2;
+  repeated string errors = 3;
+}
+
+message ShipmentPing {
+  string shipment_id = 1;
+  double latitude = 2;
+  double longitude = 3;
+}
+
+message ShipmentUpdate {
+  string shipment_id = 1;
+  string status = 2;
+  int32 minutes_out = 3;
+}
+
+message GetStockRequest {
+  string sku = 1;
+}
+
+message StockLevel {
+  string sku = 1;
+  int32 on_hand = 2;
+  int32 reserved = 3;
+  bool backordered = 4;
+}
