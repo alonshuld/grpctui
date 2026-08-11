@@ -27,7 +27,7 @@ Type "grpctui -config '' -history-file '' -collections $GRPCTUI_DEMO_DIR ${GRPCT
 Enter
 Sleep 3s
 
-Down@300ms 1
+Down@300ms 8
 Enter
 Sleep 1200ms
 
@@ -35,7 +35,7 @@ Tab
 Sleep 600ms
 Enter
 Sleep 400ms
-Type "grpc.health.v1.Health"
+Type "usr_8f21c4"
 Sleep 600ms
 Escape
 Sleep 800ms
@@ -46,7 +46,7 @@ Type "S"
 Sleep 1s
 Ctrl+U
 Sleep 300ms
-Type "smoke/health"
+Type "smoke/get-user"
 Sleep 1s
 Enter
 Sleep 2s
@@ -56,7 +56,7 @@ Ctrl+R
 Sleep 1500ms
 Type "/"
 Sleep 600ms
-Type "health"
+Type "user"
 Sleep 1500ms
 # enter settles on the filter, keeping the narrowed list and the cursor on the
 # first match. Escape here would abandon the search and put the cursor back at

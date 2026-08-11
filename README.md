@@ -78,6 +78,20 @@ docker run --rm --network host \
 
 Then `grpctui <host:port>`, and press `?` for the keys.
 
+## Try it without a server
+
+If you have not got a gRPC server to hand, the repository carries one:
+
+```bash
+go run ./cmd/demoserver &          # a made-up API on localhost:50051
+go run ./cmd/grpctui localhost:50051
+```
+
+It serves three small services with all four call shapes between them, plus the
+health service, with reflection switched on — which is exactly what the demos
+above were recorded against. Its replies are canned; everything else about it is
+a real server.
+
 ## Usage
 
 ```bash
@@ -634,9 +648,10 @@ their meaning.
 
 [docs/demos](docs/demos) holds three [VHS](https://github.com/charmbracelet/vhs)
 tapes, one per workflow worth seeing before you try it. Each records a real
-grpctui against a real server rather than a script, so a demo that goes stale is
-regenerated rather than restaged — `make demos` redraws all three. See
-[docs/demos/README.md](docs/demos/README.md) for what recording them needs.
+grpctui against [cmd/demoserver](cmd/demoserver) rather than a script, so a demo
+that goes stale is regenerated rather than restaged — `make demos` redraws all
+three. See [docs/demos/README.md](docs/demos/README.md) for what recording them
+needs.
 
 The first is at the top of this page: discovery with nothing configured, a form
 generated from the method's input message, and the response with its status and

@@ -9,6 +9,7 @@ page with no demo; `make demos` overwrites them in place:
 ```bash
 go install github.com/charmbracelet/vhs@latest   # needs ffmpeg and ttyd
 go install ./cmd/grpctui                         # the tapes type `grpctui`, so it has to be on PATH
+go run ./cmd/demoserver &                        # the target they record against
 make demos                                       # writes docs/demos/*.gif
 ```
 
@@ -24,25 +25,33 @@ grpctui:
 ## What they record against
 
 Every tape drives a real grpctui against a real server — there is no scripted
-output, which is the point of recording rather than drawing. Point them at a
-target that serves reflection:
+output, which is the point of recording rather than drawing.
+[cmd/demoserver](../../cmd/demoserver) is that server: the made-up API in
+[internal/demoapi](../../internal/demoapi), the gRPC health service, and
+reflection, on `localhost:50051`. Its replies are canned, but nothing else about
+it is: the descriptors are real, the streams are real, and grpctui discovers it
+the same way it discovers anything.
+
+Another target works too, as long as it serves reflection:
 
 ```bash
-GRPCTUI_DEMO_TARGET=localhost:50051 make demos
+GRPCTUI_DEMO_TARGET=localhost:9090 make demos
 ```
 
-The default is `localhost:50051`, and what the tapes expect there is a server
-serving **the gRPC health service and reflection, and nothing else** — which is
-a dozen lines of `health.NewServer()` and `reflection.Register()` around a
-listener. Health is what they reach for because it is registered wherever
-reflection is, and because it has one unary method (`Check`) and one
-server-streaming one (`Watch`), which is every shape these three tapes need.
+What it will not do is choose the same methods. The tapes walk the tree by
+cursor movement rather than by name, so their `Down` counts assume the demo
+server's tree — six services in the order reflection sorts them, with
+`demo.v1.UserService.GetUser` eight rows below the top and
+`demo.v1.OrderService.WatchOrders` four. Point them elsewhere and the counts
+want redoing. The timings assume a server that answers promptly; a slow one
+wants the `Sleep` lines raised.
 
-The methods are selected by cursor movement rather than by name, so a target
-exposing more than that shows a different tree and the `Down` counts have to be
-retuned — they currently assume `grpc.health.v1.Health` first, with `Check` one
-row below it and `Watch` two. The timings assume a server that answers
-promptly; a slow one wants the `Sleep` lines raised.
+Two properties of the demo server exist for the tapes specifically.
+`WatchOrders` never finishes on its own — it cycles its events for as long as
+anybody is listening, so the streaming tape can make the point that a stream
+has no timeout and `esc` is what ends it. And a reply's timestamps are filled in
+when it is sent rather than written into the source, so the gloss beside one
+reads "3 minutes ago" in a recording made today and in one made next year.
 
 Each tape starts grpctui with `-config ''` and `-history-file ''`, and the
 collections tape points `-collections` at a `mktemp -d`. A recording must not

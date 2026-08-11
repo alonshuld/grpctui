@@ -20,8 +20,9 @@ Type "grpctui -config '' -history-file '' ${GRPCTUI_DEMO_TARGET:-localhost:50051
 Enter
 Sleep 3s
 
-# Walk the tree and open a method. The form is generated from its input message.
-Down@300ms 1
+# Walk the tree to demo.v1.UserService.GetUser. The form below is generated
+# from its input message.
+Down@300ms 8
 Sleep 1s
 Enter
 Sleep 1500ms
@@ -31,12 +32,13 @@ Tab
 Sleep 800ms
 Enter
 Sleep 500ms
-Type "grpc.health.v1.Health"
+Type "usr_8f21c4"
 Sleep 800ms
 Escape
 Sleep 1s
 
-# Send, and read the response.
+# Send, and read the response: a nested message, a repeated field, a map and a
+# timestamp, each rendered as what it is.
 Ctrl+S
 Sleep 3s
 
